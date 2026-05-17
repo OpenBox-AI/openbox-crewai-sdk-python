@@ -1,0 +1,20 @@
+OpenBox Agent Governance - Sample Data File
+=============================================
+
+Project: OpenBox CrewAI SDK
+Version: 1.0.0
+Status: Active Development
+
+Key Features:
+- 3-layer governance model (pre-task, post-task, per-operation)
+- Per-agent API keys and sessions
+- OpenTelemetry-based span routing
+- Human-in-the-loop approval workflows
+- Real-time verdict enforcement (ALLOW, BLOCK, HALT)
+
+Team Members:
+- Tony Milton (Founder)
+- AI Research Team
+
+Contact: tony@openbox.ai
+Website: https://openbox.ai

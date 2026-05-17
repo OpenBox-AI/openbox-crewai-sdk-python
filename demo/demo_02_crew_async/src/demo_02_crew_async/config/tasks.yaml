@@ -1,0 +1,6 @@
+quick_research:
+  description: >-
+    List 3 key facts about OpenTelemetry and why it matters for observability.
+  expected_output: >-
+    A numbered list of 3 facts about OpenTelemetry.
+  agent: researcher

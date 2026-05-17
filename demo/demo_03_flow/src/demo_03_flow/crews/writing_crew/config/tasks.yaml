@@ -1,0 +1,6 @@
+write_report:
+  description: >-
+    Write a final report based on these analyzed findings: {findings}
+  expected_output: >-
+    A polished report with introduction, key findings, analysis, and conclusion.
+  agent: technical_writer

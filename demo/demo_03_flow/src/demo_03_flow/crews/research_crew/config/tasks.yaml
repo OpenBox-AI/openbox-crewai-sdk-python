@@ -1,0 +1,13 @@
+research_topic:
+  description: >-
+    Research the following topic: {topic}
+  expected_output: >-
+    A comprehensive collection of facts and data about the topic.
+  agent: senior_researcher
+
+analyze_findings:
+  description: >-
+    Analyze the research findings and summarize the key insights.
+  expected_output: >-
+    A structured analysis with key insights, trends, and implications.
+  agent: data_analyst
