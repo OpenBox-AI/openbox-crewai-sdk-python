@@ -50,7 +50,9 @@ class TestFlowCorrelation:
         try:
             with (
                 patch.object(GovernedCrew, "bind_openbox_engine", side_effect=[crew1, crew2]),
-                                patch.object(GovernedCrew.__bases__[0], "kickoff", return_value="done"),
+                patch.object(
+                    GovernedCrew.__bases__[0], "kickoff", return_value="done"
+                ),
             ):
                 crew1.kickoff(engine=object())
                 crew2.kickoff(engine=object())

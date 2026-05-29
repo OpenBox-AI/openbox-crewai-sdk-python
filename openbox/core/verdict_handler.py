@@ -32,7 +32,9 @@ def _check_guardrails(response: GovernanceResponse) -> None:
     raise GuardrailsValidationError(reasons)
 
 
-def _hitl_should_poll(response: GovernanceResponse, config: "GovernanceConfig", crew_name: str) -> bool:
+def _hitl_should_poll(
+    response: GovernanceResponse, config: "GovernanceConfig", crew_name: str
+) -> bool:
     if not response.verdict.requires_approval():
         return False
     if not config.hitl_enabled:

@@ -11,7 +11,6 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_concurrent__aensure_session_calls_evaluate_once() -> None:
-    from openbox.crewai.agent import OpenBoxAgent
 
     from tests.unit.conftest import make_agent
 
@@ -33,7 +32,6 @@ async def test_concurrent__aensure_session_calls_evaluate_once() -> None:
 
 @pytest.mark.asyncio
 async def test__aensure_session_uses_asyncio_lock() -> None:
-    from openbox.crewai.agent import OpenBoxAgent
 
     from tests.unit.conftest import make_agent
 

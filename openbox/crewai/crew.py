@@ -76,7 +76,8 @@ class GovernedCrew(Crew):
         governed_agents = self._governed_agents()
         if not governed_agents:
             raise OpenBoxConfigError(
-                "At least one agent must be an OpenBoxAgent. Plain Agent instances are not governed."
+                "At least one agent must be an OpenBoxAgent. "
+                "Plain Agent instances are not governed."
             )
         engine.validate_agent_api_keys(governed_agents)
         self.configure_governance(

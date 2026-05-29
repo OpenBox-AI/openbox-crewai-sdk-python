@@ -7,8 +7,9 @@ Exposes ``is_configured``, ``evaluate_sync``, ``evaluate_async``, and
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+from openbox.core.spans.base import SpanData
 from openbox.instrumentation.interceptors._runtime import (
     evaluate_started,
     get_current_trace_id,
@@ -84,7 +85,7 @@ def evaluate_sync(
     trace_id = get_current_trace_id()
     if trace_id is None:
         return
-    evaluate_started(trace_id, _DictSpanData(span_data))
+    evaluate_started(trace_id, cast(SpanData, _DictSpanData(span_data)))
 
 
 async def evaluate_async(

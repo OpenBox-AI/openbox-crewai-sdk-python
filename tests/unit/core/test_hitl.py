@@ -10,6 +10,7 @@ from openbox.core.config import GovernanceConfig
 from openbox.core.errors import GovernanceApprovalExpiredError
 from openbox.core.types import ApprovalResponse, Verdict
 
+
 class TestApprovalExpired:
     """Client-side safety net: if approval_expiration_time has passed and
     Core hasn't yet returned halt, the SDK raises GovernanceApprovalExpiredError."""

@@ -12,6 +12,7 @@ from openbox.utils import validate_api_key_format
 
 if TYPE_CHECKING:
     from crewai import Crew
+
     from openbox.core.types import AgentContext
     from openbox.crewai.crew import GovernedCrew
     from openbox.instrumentation.otel_setup import InstrumentationSettings

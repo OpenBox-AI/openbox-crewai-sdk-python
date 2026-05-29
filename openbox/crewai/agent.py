@@ -190,14 +190,15 @@ class OpenBoxAgent(Agent):
     def _install_llm_pre_check(self) -> None:
         if self.llm is None or self._span_processor is None:
             return
+        llm: Any = self.llm
         sp = self._span_processor
         role = self.role
 
-        if getattr(self.llm, "_openbox_pre_check_installed", False):
+        if getattr(llm, "_openbox_pre_check_installed", False):
             return
 
-        original_call = self.llm.call
-        original_acall = getattr(self.llm, "acall", None)
+        original_call = llm.call
+        original_acall = getattr(llm, "acall", None)
 
         def _check() -> None:
             current = trace.get_current_span()
@@ -214,16 +215,16 @@ class OpenBoxAgent(Agent):
             _check()
             return original_call(*args, **kwargs)
 
-        self.llm.call = governed_call
+        llm.call = governed_call
 
         if original_acall is not None:
             async def governed_acall(*args: Any, **kwargs: Any) -> Any:
                 _check()
                 return await original_acall(*args, **kwargs)
 
-            self.llm.acall = governed_acall
+            llm.acall = governed_acall
 
-        self.llm._openbox_pre_check_installed = True
+        llm._openbox_pre_check_installed = True
 
     def _resolve_identity(self) -> AgentIdentity | None:
         did_env = self._env_var("DID")
@@ -293,6 +294,7 @@ class OpenBoxAgent(Agent):
         self.ensure_session(client, self._crew_name, metadata)
 
         if self._should_emit_handoff(handoff_origin_did):
+            assert handoff_origin_did is not None
             handoff_payload = HandoffPayload(
                 workflow_id=self._session_id or "",
                 run_id=self._run_id or "",
@@ -592,6 +594,7 @@ class OpenBoxAgent(Agent):
         await self._aensure_session(client, self._crew_name, metadata)
 
         if self._should_emit_handoff(handoff_origin_did):
+            assert handoff_origin_did is not None
             handoff_payload = HandoffPayload(
                 workflow_id=self._session_id or "",
                 run_id=self._run_id or "",

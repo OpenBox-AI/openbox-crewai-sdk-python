@@ -72,7 +72,10 @@ def test_each_agent_validates_with_its_own_identity(monkeypatch: pytest.MonkeyPa
     )
 
     engine.validate_agent_api_keys(
-        [FakeAgent(env_prefix="OPENBOX_A", identity=id_a), FakeAgent(env_prefix="OPENBOX_B", identity=id_b)]
+        [
+            FakeAgent(env_prefix="OPENBOX_A", identity=id_a),
+            FakeAgent(env_prefix="OPENBOX_B", identity=id_b),
+        ]
     )
 
     identities_passed = [call.args[1] for call in mock_client.validate_api_key.call_args_list]

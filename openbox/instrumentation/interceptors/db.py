@@ -127,7 +127,11 @@ def _build_db_span_data(
     if not span_name or not isinstance(span_name, str):
         span_name = f"{db_operation} {db_system}"
     now_ns = time.time_ns()
-    semantic_type = f"database_{db_operation.lower()}" if db_operation and db_operation != "UNKNOWN" else "database_query"
+    semantic_type = (
+        f"database_{db_operation.lower()}"
+        if db_operation and db_operation != "UNKNOWN"
+        else "database_query"
+    )
 
     return {
         "span_id": span_id_hex,
@@ -370,8 +374,10 @@ def install_cursor_tracer_hooks() -> bool:
         logger.debug("CursorTracer already patched — skipping")
         return True
 
-    _orig_traced_execution = CursorTracer.traced_execution
-    _orig_traced_execution_async = getattr(CursorTracer, "traced_execution_async", None)
+    orig_sync = CursorTracer.traced_execution
+    orig_async = getattr(CursorTracer, "traced_execution_async", None)
+    _orig_traced_execution = orig_sync
+    _orig_traced_execution_async = orig_async
 
     def _gov_traced_execution(self, cursor, query_method, *args, **kwargs):
         db_system, db_name, operation, stmt, host, port = _extract_dbapi_context(self, args)
@@ -383,11 +389,11 @@ def install_cursor_tracer_hooks() -> bool:
                 stmt=stmt, host=host, port=port, cursor=cursor,
             )
 
-        return _orig_traced_execution(self, cursor, _governed_query, *args, **kwargs)
+        return orig_sync(self, cursor, _governed_query, *args, **kwargs)
 
     CursorTracer.traced_execution = _gov_traced_execution
 
-    if _orig_traced_execution_async is not None:
+    if orig_async is not None:
         async def _gov_traced_execution_async(self, cursor, query_method, *args, **kwargs):
             db_system, db_name, operation, stmt, host, port = _extract_dbapi_context(self, args)
 
@@ -398,11 +404,11 @@ def install_cursor_tracer_hooks() -> bool:
                     stmt=stmt, host=host, port=port, cursor=cursor,
                 )
 
-            return await _orig_traced_execution_async(
+            return await orig_async(
                 self, cursor, _governed_query_async, *args, **kwargs
             )
 
-        CursorTracer.traced_execution_async = _gov_traced_execution_async
+        setattr(CursorTracer, "traced_execution_async", _gov_traced_execution_async)
 
     logger.info("CursorTracer patched with governance hooks (all dbapi libs)")
     return True
@@ -419,7 +425,7 @@ def _uninstall_cursor_tracer_hooks() -> None:
         from opentelemetry.instrumentation.dbapi import CursorTracer
         CursorTracer.traced_execution = _orig_traced_execution
         if _orig_traced_execution_async is not None:
-            CursorTracer.traced_execution_async = _orig_traced_execution_async
+            setattr(CursorTracer, "traced_execution_async", _orig_traced_execution_async)
     except ImportError:
         pass
 
@@ -457,8 +463,8 @@ def install_asyncpg_hooks() -> bool:
         return True
 
     try:
-        import wrapt
         import asyncpg  # noqa: F401
+        import wrapt
     except ImportError:
         logger.debug("asyncpg or wrapt not available for governance hooks")
         return False
@@ -518,8 +524,8 @@ def install_psycopg2_hooks() -> bool:
         return True
 
     try:
-        import wrapt
         import psycopg2  # noqa: F401
+        import wrapt
     except ImportError:
         logger.debug("psycopg2 or wrapt not available for governance hooks")
         return False
@@ -591,8 +597,8 @@ def install_aiopg_hooks() -> bool:
         return True
 
     try:
-        import wrapt
         import aiopg  # noqa: F401
+        import wrapt
     except ImportError:
         logger.debug("aiopg or wrapt not available for governance hooks")
         return False
@@ -657,8 +663,8 @@ def install_psycopg3_async_hooks() -> bool:
         return True
 
     try:
-        import wrapt
         import psycopg  # noqa: F401
+        import wrapt
     except ImportError:
         logger.debug("psycopg or wrapt not available for governance hooks")
         return False
@@ -991,7 +997,11 @@ def setup_sqlalchemy_hooks(engine) -> None:
         operation = _classify_sql(statement)
         host = context.engine.url.host
         port = context.engine.url.port
-        error_msg = str(context.original_exception) if hasattr(context, "original_exception") else "Unknown error"
+        error_msg = (
+            str(context.original_exception)
+            if hasattr(context, "original_exception")
+            else "Unknown error"
+        )
 
         current_span = otel_trace.get_current_span()
         ident = _db_identifier(db_system, host, port, db_name)

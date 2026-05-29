@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from openbox.core.types import AgentContext
 from openbox.core.aip_signing import AgentIdentity
 from openbox.core.errors import GovernanceBlockedError
 from openbox.core.spans.base import Stage
 from openbox.core.spans.db import DbSpanData
-from openbox.core.types import GovernanceResponse, Verdict
+from openbox.core.types import AgentContext, GovernanceResponse, Verdict
 from openbox.instrumentation.interceptors import _runtime
 
 from .conftest import install_runtime as _install_runtime

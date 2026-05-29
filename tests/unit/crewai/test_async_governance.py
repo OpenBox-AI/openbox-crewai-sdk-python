@@ -185,7 +185,7 @@ class TestAsyncExecuteTask:
             mock_super.return_value = "result"
             await self.agent.aexecute_task(task)
 
-        # WorkflowStarted + user_input signal + ActivityStarted + ActivityCompleted + agent_output signal.
+        # WorkflowStarted + user_input + ActivityStarted + ActivityCompleted + agent_output.
         assert self.client.aevaluate.call_count == 5
         activity_started = next(
             c[0][0]
@@ -213,7 +213,7 @@ class TestAsyncExecuteTask:
             result = await self.agent.aexecute_task(task)
 
         assert result == "done"
-        # WorkflowStarted + user_input signal + ActivityStarted + ActivityCompleted + agent_output signal
+        # WorkflowStarted + user_input + ActivityStarted + ActivityCompleted + agent_output.
         assert self.client.aevaluate.call_count == 5
 
 

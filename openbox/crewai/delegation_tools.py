@@ -16,7 +16,7 @@ Verified against crewai==1.14.x. When bumping crewai, re-verify:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.task import Task
@@ -107,18 +107,24 @@ def make_openbox_delegation_tools(
     """
     resolved = i18n if i18n is not None else get_i18n()
     coworkers = ", ".join(a.role for a in agents)
-    return [
+    agent_list = list(agents)
+    tools: list[BaseTool] = [
         OpenBoxDelegateWorkTool(
-            agents=agents,
+            agents=agent_list,
             i18n=resolved,
-            description=resolved.tools("delegate_work").format(coworkers=coworkers),
+            description=cast(str, resolved.tools("delegate_work")).format(
+                coworkers=coworkers
+            ),
         ),
         OpenBoxAskQuestionTool(
-            agents=agents,
+            agents=agent_list,
             i18n=resolved,
-            description=resolved.tools("ask_question").format(coworkers=coworkers),
+            description=cast(str, resolved.tools("ask_question")).format(
+                coworkers=coworkers
+            ),
         ),
     ]
+    return tools
 
 
 def openbox_manager_get_delegation_tools(

@@ -58,8 +58,9 @@ class HookRuntime:
         self.engine = engine
 
     def binding_for_trace(self, trace_id: int) -> RuntimeBinding | None:
-        if self.engine is not None and hasattr(self.engine, "binding_for_trace"):
-            binding = self.engine.binding_for_trace(trace_id)
+        engine_binding_for_trace = getattr(self.engine, "binding_for_trace", None)
+        if engine_binding_for_trace is not None:
+            binding = engine_binding_for_trace(trace_id)
             if binding is None:
                 return None
             return RuntimeBinding(
