@@ -53,7 +53,7 @@ dependencies = [
     "opentelemetry-instrumentation-redis>=0.50b0",
     "opentelemetry-instrumentation-sqlalchemy>=0.50b0",
     "python-dotenv>=1.1.1",
-    "cryptography>=42.0.0",
+    "cryptography>=48.0.1",
 ]
 
 [project.urls]
