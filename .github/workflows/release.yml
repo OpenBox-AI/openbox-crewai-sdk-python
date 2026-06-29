@@ -228,7 +228,7 @@ jobs:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
 
       - name: Upload Gitleaks SARIF to GitHub Security
-        if: always()
+        if: always() && hashFiles('results.sarif') != ''
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v4
         with:
@@ -236,7 +236,7 @@ jobs:
           category: gitleaks-release
 
       - name: Upload Gitleaks SARIF artifact
-        if: always()
+        if: always() && hashFiles('results.sarif') != ''
         uses: actions/upload-artifact@v4
         with:
           name: gitleaks-release-results
@@ -294,11 +294,27 @@ jobs:
           path: security-artifacts/trivy
 
       - name: Download Gitleaks SARIF artifact
+        id: download_gitleaks_sarif
         if: ${{ env.SONAR_TOKEN != '' && env.SONAR_HOST_URL != '' }}
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: gitleaks-release-results
           path: security-artifacts/gitleaks
+
+      - name: Compose SonarQube SARIF report paths
+        id: sonar_sarif_paths
+        if: ${{ env.SONAR_TOKEN != '' && env.SONAR_HOST_URL != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths="security-artifacts/trivy/trivy-release-results.sarif"
+          if [ -f "security-artifacts/gitleaks/gitleaks-release-results.sarif" ]; then
+            paths="${paths},security-artifacts/gitleaks/gitleaks-release-results.sarif"
+          else
+            echo "Gitleaks SARIF not present; excluding from SonarQube scan."
+          fi
+          echo "paths=${paths}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Java
         if: ${{ env.SONAR_TOKEN != '' && env.SONAR_HOST_URL != '' }}
@@ -324,7 +340,7 @@ jobs:
           SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
         with:
           args: >
-            -Dsonar.sarifReportPaths=security-artifacts/trivy/trivy-release-results.sarif,security-artifacts/gitleaks/gitleaks-release-results.sarif
+            -Dsonar.sarifReportPaths=${{ steps.sonar_sarif_paths.outputs.paths }}
 
       - name: SonarQube Quality Gate check
         id: sonarqube_quality_gate
