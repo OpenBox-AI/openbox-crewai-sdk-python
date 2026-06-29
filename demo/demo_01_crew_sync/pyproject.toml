@@ -1,0 +1,25 @@
+[project]
+name = "demo_01_crew_sync"
+version = "0.1.0"
+description = "OpenBox-governed CrewAI demo — single signed agent, sync kickoff"
+authors = [{ name = "OpenBox Team", email = "tony@openbox.ai" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "crewai[tools]>=1.14.1",
+    "python-dotenv>=1.1.1",
+    "openbox-crewai-sdk-python",
+]
+
+[project.scripts]
+demo_01_crew_sync = "demo_01_crew_sync.main:run"
+run_crew = "demo_01_crew_sync.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "crew"
+
+[tool.uv.sources]
+openbox-crewai-sdk-python = { path = "../..", editable = true }

@@ -1,0 +1,25 @@
+[project]
+name = "demo_04_collaboration"
+version = "0.1.0"
+description = "OpenBox-governed CrewAI demo — three signed agents with delegation"
+authors = [{ name = "OpenBox Team", email = "tony@openbox.ai" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "crewai[tools]>=1.14.1",
+    "python-dotenv>=1.1.1",
+    "openbox-crewai-sdk-python",
+]
+
+[project.scripts]
+demo_04_collaboration = "demo_04_collaboration.main:run"
+run_crew = "demo_04_collaboration.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "crew"
+
+[tool.uv.sources]
+openbox-crewai-sdk-python = { path = "../..", editable = true }

@@ -1,0 +1,10 @@
+collaborative_article:
+  description: >-
+    Write a concise ~400-word article about 'The Future of AI in Healthcare'.
+    The article should cover current AI applications in healthcare, emerging
+    trends and technologies, and potential challenges and ethical
+    considerations. Collaborate with your teammates: delegate any deep research
+    to the Research Specialist and ask the Content Editor to review the draft.
+  expected_output: >-
+    A well-researched, engaging ~400-word article with proper structure.
+  agent: writer
