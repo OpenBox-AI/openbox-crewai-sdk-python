@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from openbox.instrumentation.interceptors import _runtime
 from openbox.instrumentation.interceptors import db as db_gov
+from openbox.utils import _current_execution_frame
 
 from .conftest import active_span
 
@@ -29,7 +30,7 @@ class TestGovernanceDisabled:
 
     def test_no_governance_outside_activity(self, governance):
         sp, gc = governance
-        sp.get_agent_context.return_value = None
+        _current_execution_frame.set(None)  # no governed agent executing
         req_hook, _ = db_gov.setup_redis_hooks()
         instance = _make_redis_instance()
         span = MagicMock()

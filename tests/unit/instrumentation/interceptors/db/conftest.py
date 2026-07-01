@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace import TracerProvider
 
 from openbox.instrumentation.interceptors import _runtime
 from openbox.instrumentation.interceptors import db as db_gov
+from openbox.utils import _current_execution_frame, set_current_execution_frame
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +28,7 @@ def _cleanup_hooks():
     yield
     db_gov.uninstrument_all()
     _runtime._runtime = None
+    _current_execution_frame.set(None)
 
 
 def _make_verdict_response(action: str = "allow", reason: str | None = None) -> MagicMock:
@@ -43,21 +45,20 @@ def _make_verdict_response(action: str = "allow", reason: str | None = None) -> 
 
 
 def _setup_governance(on_api_error: str = "fail_open") -> tuple[MagicMock, MagicMock]:
-    sp = MagicMock()
-    sp.get_agent_context.return_value = MagicMock(
-        session_id="sess-1",
-        run_id="run-1",
-        role="Tester",
-        crew_name="crew-1",
-        api_key="k",
-        identity=None,
-        multi_agent_session_id=None,
+    set_current_execution_frame(
+        MagicMock(
+            session_id="sess-1",
+            run_id="run-1",
+            role="Tester",
+            crew_name="crew-1",
+            api_key="k",
+            identity=None,
+            multi_agent_session_id=None,
+        ),
+        {"activity_id": "act-1", "activity_type": "db_query"},
     )
+    sp = MagicMock()
     sp.is_aborted.return_value = False
-    sp.get_activity_context.return_value = {
-        "activity_id": "act-1",
-        "activity_type": "db_query",
-    }
 
     gc = MagicMock()
     gc.evaluate.return_value = _make_verdict_response("allow")

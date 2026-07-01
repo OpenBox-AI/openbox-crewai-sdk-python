@@ -8,6 +8,10 @@ from openbox.core.spans.base import Stage
 from openbox.core.spans.db import DbSpanData
 from openbox.core.types import AgentContext, GovernanceResponse, Verdict
 from openbox.instrumentation.interceptors import _runtime
+from openbox.utils import (
+    reset_current_execution_frame,
+    set_current_execution_frame,
+)
 
 from .conftest import install_runtime as _install_runtime
 
@@ -143,22 +147,11 @@ def test_wait_for_approval_forwards_agent_identity() -> None:
     assert forwarded is identity
 
 
-def test_current_execution_frame_overrides_trace_level_context() -> None:
-    sp, gc = _install_runtime(
+def test_evaluate_started_attributes_to_execution_frame() -> None:
+    _, gc = _install_runtime(
         response=GovernanceResponse(verdict=Verdict.ALLOW),
+        set_frame=False,
     )
-    sp.get_agent_context.return_value = AgentContext(
-        role="Worker",
-        session_id="sess-worker",
-        run_id="run-worker",
-        api_key="obx_test_worker",
-        crew_name="crew-worker",
-        crew_execution_id="crew-exec-worker",
-    )
-    sp.get_activity_context.return_value = {
-        "activity_id": "act-worker",
-        "activity_type": "worker_query",
-    }
 
     manager_ctx = AgentContext(
         role="Manager",
@@ -168,7 +161,7 @@ def test_current_execution_frame_overrides_trace_level_context() -> None:
         crew_name="crew-manager",
         crew_execution_id="crew-exec-manager",
     )
-    token = _runtime.set_current_execution_frame(
+    token = set_current_execution_frame(
         manager_ctx,
         {
             "activity_id": "act-manager",
@@ -178,7 +171,7 @@ def test_current_execution_frame_overrides_trace_level_context() -> None:
     try:
         _runtime.evaluate_started(trace_id=123, span_data=_make_span())
     finally:
-        _runtime.reset_current_execution_frame(token)
+        reset_current_execution_frame(token)
 
     payload = gc.evaluate.call_args[0][0]
     assert payload["workflow_id"] == "sess-manager"
@@ -192,6 +185,7 @@ def test_current_execution_frame_overrides_trace_level_context() -> None:
 def test_nested_execution_frame_reset_restores_outer_context() -> None:
     _, gc = _install_runtime(
         response=GovernanceResponse(verdict=Verdict.ALLOW),
+        set_frame=False,
     )
 
     manager_ctx = AgentContext(
@@ -211,7 +205,7 @@ def test_nested_execution_frame_reset_restores_outer_context() -> None:
         crew_execution_id="crew-exec-worker",
     )
 
-    outer = _runtime.set_current_execution_frame(
+    outer = set_current_execution_frame(
         manager_ctx,
         {
             "activity_id": "act-manager",
@@ -219,7 +213,7 @@ def test_nested_execution_frame_reset_restores_outer_context() -> None:
         },
     )
     try:
-        inner = _runtime.set_current_execution_frame(
+        inner = set_current_execution_frame(
             worker_ctx,
             {
                 "activity_id": "act-worker",
@@ -229,11 +223,11 @@ def test_nested_execution_frame_reset_restores_outer_context() -> None:
         try:
             _runtime.evaluate_started(trace_id=123, span_data=_make_span())
         finally:
-            _runtime.reset_current_execution_frame(inner)
+            reset_current_execution_frame(inner)
 
         _runtime.evaluate_started(trace_id=123, span_data=_make_span())
     finally:
-        _runtime.reset_current_execution_frame(outer)
+        reset_current_execution_frame(outer)
 
     first_payload = gc.evaluate.call_args_list[0][0][0]
     second_payload = gc.evaluate.call_args_list[1][0][0]
