@@ -13,7 +13,6 @@ from openbox.utils import validate_api_key_format
 if TYPE_CHECKING:
     from crewai import Crew
 
-    from openbox.core.types import AgentContext
     from openbox.crewai.crew import GovernedCrew
     from openbox.instrumentation.otel_setup import InstrumentationSettings
     from openbox.instrumentation.span_processor import GovernanceSpanProcessor
@@ -66,16 +65,6 @@ class OpenBoxEngine:
             )
 
         return self.span_processor
-
-    def register_trace(
-        self,
-        trace_id: int,
-        agent_context: AgentContext,
-    ) -> None:
-        self.span_processor.register_trace(trace_id, agent_context)
-
-    def unregister_trace(self, trace_id: int) -> None:
-        self.span_processor.clear_trace(trace_id)
 
     def binding_for_trace(self, trace_id: int) -> dict[str, Any] | None:
         if self._span_processor is None:

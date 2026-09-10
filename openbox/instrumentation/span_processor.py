@@ -14,11 +14,11 @@ from openbox.core.client import GovernanceClient
 from openbox.core.config import GovernanceConfig
 from openbox.core.payloads import HookPayload
 from openbox.core.spans import SpanData
-from openbox.core.types import AgentContext
 from openbox.utils import (
     _llm_allowed_var,
     _llm_block_info_var,
     build_metadata,
+    get_current_execution_frame,
     truncate_body,
 )
 
@@ -55,24 +55,10 @@ class GovernanceSpanProcessor(SpanProcessor):
             else None
         )
         self._lock = threading.Lock()
-        self._agent_contexts: dict[int, AgentContext] = {}
         self._abort_flags: set[tuple[int, str]] = set()
         self._block_info_by_activity: dict[str, dict[str, Any]] = {}
         self._block_info_by_agent: dict[tuple[int, str], dict[str, Any]] = {}
         self._body_data: dict[int, dict[str, Any]] = {}
-        self._activity_contexts: dict[int, dict[str, Any]] = {}
-
-    def register_trace(
-        self,
-        trace_id: int,
-        agent_context: AgentContext,
-    ) -> None:
-        with self._lock:
-            self._agent_contexts[trace_id] = agent_context
-
-    def get_agent_context(self, trace_id: int) -> AgentContext | None:
-        with self._lock:
-            return self._agent_contexts.get(trace_id)
 
     def set_abort(self, trace_id: int, agent_role: str) -> None:
         with self._lock:
@@ -120,31 +106,6 @@ class GovernanceSpanProcessor(SpanProcessor):
         with self._lock:
             return self._body_data.pop(span_id, None)
 
-    def set_activity_context(self, trace_id: int, context: dict[str, Any]) -> None:
-        with self._lock:
-            self._activity_contexts[trace_id] = context
-
-    def get_activity_context(self, trace_id: int) -> dict[str, Any] | None:
-        with self._lock:
-            return self._activity_contexts.get(trace_id)
-
-    def clear_activity_context(self, trace_id: int) -> None:
-        with self._lock:
-            self._activity_contexts.pop(trace_id, None)
-
-    def clear_trace(self, trace_id: int) -> None:
-        with self._lock:
-            self._agent_contexts.pop(trace_id, None)
-            self._activity_contexts.pop(trace_id, None)
-            self._abort_flags = {
-                (t, r) for (t, r) in self._abort_flags if t != trace_id
-            }
-            self._block_info_by_agent = {
-                (t, r): v
-                for (t, r), v in self._block_info_by_agent.items()
-                if t != trace_id
-            }
-
     def add_ignored_prefix(self, prefix: str) -> None:
         if self._default_binding is None:
             return
@@ -172,9 +133,13 @@ class GovernanceSpanProcessor(SpanProcessor):
         if binding is None:
             return
 
-        agent_ctx = self.get_agent_context(trace_id)
-        if agent_ctx is None:
+        # The acting agent comes from the execution frame, which nests and
+        # restores through delegation. No frame means no governed agent is
+        # executing, so there is nothing to attribute.
+        frame = get_current_execution_frame()
+        if frame is None:
             return
+        agent_ctx = frame.agent_context
 
         http_url = _get_http_url(attrs)
         if http_url and self._is_ignored_url(http_url, binding["ignored_url_prefixes"]):
@@ -188,7 +153,7 @@ class GovernanceSpanProcessor(SpanProcessor):
             )
             return
 
-        act_ctx = self.get_activity_context(trace_id)
+        act_ctx = frame.activity_context
         if act_ctx is None:
             return
 

@@ -289,9 +289,8 @@ class TestEmitStartedEarlyExits:
         assert file_io._emit_started(tmp_file, "r", "read") is None
         assert gc.evaluate.call_count == 0
 
-    def test_no_agent_context_does_nothing(self, tmp_file):
-        sp, gc = _install_runtime()
-        sp.get_agent_context.return_value = None
+    def test_skips_when_no_execution_frame(self, tmp_file):
+        _, gc = _install_runtime(set_frame=False)  # no governed agent executing
         with _active_span():
             assert file_io._emit_started(tmp_file, "r", "read") is None
         assert gc.evaluate.call_count == 0

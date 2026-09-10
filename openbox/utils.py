@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -55,6 +56,38 @@ _multi_agent_session_id_var: ContextVar[str | None] = ContextVar(
 _handoff_origin_did_var: ContextVar[str | None] = ContextVar(
     "_handoff_origin_did_var", default=None
 )
+
+
+@dataclass(slots=True)
+class ExecutionFrame:
+    """The agent and activity currently executing. Set around each agent task
+    and read by governance evaluation to attribute activity to the acting agent;
+    it nests and restores through delegation."""
+
+    agent_context: AgentContext
+    activity_context: dict[str, Any]
+
+
+_current_execution_frame: ContextVar[ExecutionFrame | None] = ContextVar(
+    "openbox_current_execution_frame", default=None
+)
+
+
+def set_current_execution_frame(
+    agent_context: AgentContext,
+    activity_context: dict[str, Any],
+) -> Token[ExecutionFrame | None]:
+    return _current_execution_frame.set(
+        ExecutionFrame(agent_context=agent_context, activity_context=activity_context)
+    )
+
+
+def reset_current_execution_frame(token: Token[ExecutionFrame | None]) -> None:
+    _current_execution_frame.reset(token)
+
+
+def get_current_execution_frame() -> ExecutionFrame | None:
+    return _current_execution_frame.get()
 
 
 def rfc3339_now() -> str:
