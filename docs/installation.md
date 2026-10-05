@@ -15,8 +15,8 @@ export OPENBOX_URL="https://your-openbox-core.example"
 
 # Per agent — env_prefix on OpenBoxAgent drives the lookup
 export OPENBOX_RESEARCHER_API_KEY="obx_live_your_key"
-export OPENBOX_RESEARCHER_DID="did:aip:<uuid>"              # enable AIP signing
-export OPENBOX_RESEARCHER_PRIVATE_KEY="base64_ed25519_seed" # paired with DID
+# IAM v3: load the registered RSA private key as PEM contents
+export OPENBOX_RESEARCHER_WORKLOAD_PRIVATE_KEY="$(cat /path/to/workload-private-key.pem)"
 ```
 
 Validation at `engine.govern(crew)`:
@@ -24,9 +24,14 @@ Validation at `engine.govern(crew)`:
 - API key matches `obx_live_*` or `obx_test_*`
 - non-localhost URLs use HTTPS
 - DID and private key configured together when AIP signing is enabled
-- API key round-tripped against `/api/v1/auth/validate`
+- configured workload key is an RSA private key of at least 2048 bits
+- workload identity bootstrapped and API key validated against `/api/v3/auth/validate`, or `/api/v1/auth/validate` for legacy authentication
 
 A bad value raises `OpenBoxConfigError`, `OpenBoxAuthError`, or `OpenBoxNetworkError`.
+
+Legacy DID signing uses `{PREFIX}_DID` and `{PREFIX}_PRIVATE_KEY` together instead.
+See [configuration](./configuration.md#workload-identity) for key precedence,
+rolling-upgrade fallback, and the `workload_private_key` agent argument.
 
 ## Minimal startup
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -20,10 +22,13 @@ from openbox.core.errors import (
     GovernanceApprovalExpiredError,
     OpenBoxAuthError,
     OpenBoxNetworkError,
+    OpenBoxSigningError,
 )
 from openbox.core.trace_logger import AgentTraceLogger
 from openbox.core.types import ApprovalResponse, GovernanceResponse, Verdict
-from openbox.utils import parse_iso8601_utc, validate_url
+from openbox.core.workload_auth import WorkloadAuth
+from openbox.core.workload_identity import WORKLOAD_TOKEN_HEADER, extract_reason_code
+from openbox.utils import parse_iso8601_utc, suppress_governance_http, validate_url
 
 logger = logging.getLogger("openbox")
 
@@ -38,6 +43,88 @@ class GovernanceClient:
         self._async_http = httpx.AsyncClient(timeout=config.api_timeout)
         self._debug = config.debug_log
         self._traces: dict[str, AgentTraceLogger] = {}
+        self._workload_auth: dict[tuple[str, AgentIdentity | None, bytes], WorkloadAuth] = {}
+        self._workload_lock = threading.Lock()
+
+    def _get_workload_auth(
+        self, api_key: str, identity: AgentIdentity | None, private_key: str | None
+    ) -> WorkloadAuth | None:
+        if private_key is None:
+            return None
+        normalized = private_key.strip()
+        cache_key = (api_key, identity, hashlib.sha256(normalized.encode()).digest())
+        with self._workload_lock:
+            auth = self._workload_auth.get(cache_key)
+            if auth is None:
+                auth = WorkloadAuth(normalized)
+                self._workload_auth[cache_key] = auth
+            return auth
+
+    def _prepare_request(
+        self,
+        api_key: str,
+        method: str,
+        pathname: str,
+        body: str,
+        identity: AgentIdentity | None,
+        workload_private_key: str | None,
+    ) -> tuple[str, dict[str, str]]:
+        auth = self._get_workload_auth(api_key, identity, workload_private_key)
+        token = (
+            auth.token(self._http, self._api_url, self.build_auth_headers(api_key))
+            if auth
+            else None
+        )
+        return self._request_headers(api_key, method, pathname, body, identity, token)
+
+    async def _aprepare_request(
+        self,
+        api_key: str,
+        method: str,
+        pathname: str,
+        body: str,
+        identity: AgentIdentity | None,
+        workload_private_key: str | None,
+    ) -> tuple[str, dict[str, str]]:
+        auth = self._get_workload_auth(api_key, identity, workload_private_key)
+        token = (
+            await auth.atoken(self._http, self._api_url, self.build_auth_headers(api_key))
+            if auth
+            else None
+        )
+        return self._request_headers(api_key, method, pathname, body, identity, token)
+
+    def _request_headers(
+        self,
+        api_key: str,
+        method: str,
+        pathname: str,
+        body: str,
+        identity: AgentIdentity | None,
+        token: str | None,
+    ) -> tuple[str, dict[str, str]]:
+        if token is not None:
+            headers = self.build_auth_headers(api_key)
+            headers[WORKLOAD_TOKEN_HEADER] = token
+            pathname = pathname.replace("/api/v1/", "/api/v3/", 1)
+        else:
+            headers = self.build_request_headers(
+                api_key=api_key, method=method, pathname=pathname, body=body, identity=identity
+            )
+        return self._api_url + pathname, headers
+
+    @staticmethod
+    def _raise_auth_error(response: httpx.Response, headers: dict[str, str]) -> None:
+        if response.status_code not in (401, 403):
+            return
+        if WORKLOAD_TOKEN_HEADER in headers or "X-OpenBox-Agent-DID" in headers:
+            reason = extract_reason_code(response.content)
+            if reason:
+                raise OpenBoxSigningError("OpenBox identity proof was rejected.", reason)
+        raise OpenBoxAuthError(
+            f"Invalid API key or identity (HTTP {response.status_code}). "
+            "Check your credentials at dashboard.openbox.ai"
+        )
 
     def _get_trace(self, api_key: str) -> AgentTraceLogger | None:
         if not self._debug:
@@ -51,18 +138,21 @@ class GovernanceClient:
         self,
         api_key: str,
         identity: AgentIdentity | None = None,
+        *,
+        workload_private_key: str | None = None,
     ) -> None:
-        url = f"{self._api_url}{AUTH_VALIDATE_PATH}"
-        headers = self.build_request_headers(
-            api_key=api_key,
-            method="GET",
-            pathname=AUTH_VALIDATE_PATH,
-            body="",
-            identity=identity,
+        url, headers = self._prepare_request(
+            api_key,
+            "GET",
+            AUTH_VALIDATE_PATH,
+            "",
+            identity,
+            workload_private_key,
         )
 
         try:
-            response = self._http.get(url, headers=headers)
+            with suppress_governance_http():
+                response = self._http.get(url, headers=headers)
         except httpx.HTTPError as exc:
             raise OpenBoxNetworkError(
                 f"Cannot reach OpenBox Core at {self._api_url}: {exc}"
@@ -70,8 +160,7 @@ class GovernanceClient:
 
         if response.status_code == 200:
             return
-        if response.status_code in (401, 403):
-            raise OpenBoxAuthError("Invalid API key. Check your API key at dashboard.openbox.ai")
+        self._raise_auth_error(response, headers)
         raise OpenBoxNetworkError(
             f"Cannot reach OpenBox Core at {self._api_url}: HTTP {response.status_code}"
         )
@@ -81,31 +170,34 @@ class GovernanceClient:
         payload: dict[str, Any],
         api_key: str,
         identity: AgentIdentity | None = None,
+        *,
+        workload_private_key: str | None = None,
     ) -> GovernanceResponse:
-        """POST /api/v1/governance/evaluate
+        """Evaluate using v3 workload authentication or the legacy v1 route.
 
         On network error: fail_open returns ALLOW, fail_closed raises.
         On fallback_used + on_fallback=fail_closed: overrides to BLOCK.
         """
-        url = f"{self._api_url}{EVALUATE_PATH}"
         body = json.dumps(payload)
-        headers = self.build_request_headers(
-            api_key=api_key,
-            method="POST",
-            pathname=EVALUATE_PATH,
-            body=body,
-            identity=identity,
+        url, headers = self._prepare_request(
+            api_key,
+            "POST",
+            EVALUATE_PATH,
+            body,
+            identity,
+            workload_private_key,
         )
 
         try:
-            response = self._http.post(url, content=body, headers=headers)
+            with suppress_governance_http():
+                response = self._http.post(url, content=body, headers=headers)
+            self._raise_auth_error(response, headers)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.warning(
-                "Governance API returned %s for %s: %s",
+                "Governance API returned %s for %s",
                 exc.response.status_code,
                 url,
-                exc.response.text[:200],
             )
             return self._handle_api_error(exc)
         except httpx.HTTPError as exc:
@@ -115,7 +207,7 @@ class GovernanceClient:
         data = response.json()
         trace = self._get_trace(api_key)
         if trace:
-            trace.log(EVALUATE_PATH, payload, data)
+            trace.log(httpx.URL(url).path, payload, data)
         gov_response = GovernanceResponse.from_dict(data)
 
         if gov_response.fallback_used and self._config.on_fallback == "fail_closed":
@@ -133,25 +225,29 @@ class GovernanceClient:
         activity_id: str,
         api_key: str,
         identity: AgentIdentity | None = None,
+        *,
+        workload_private_key: str | None = None,
     ) -> ApprovalResponse:
-        """Single poll: POST /api/v1/governance/approval"""
-        url = f"{self._api_url}{APPROVAL_PATH}"
+        """Single approval poll using the active authentication route."""
         payload = {
             "workflow_id": workflow_id,
             "run_id": run_id,
             "activity_id": activity_id,
         }
         body = json.dumps(payload)
-        headers = self.build_request_headers(
-            api_key=api_key,
-            method="POST",
-            pathname=APPROVAL_PATH,
-            body=body,
-            identity=identity,
+        url, headers = self._prepare_request(
+            api_key,
+            "POST",
+            APPROVAL_PATH,
+            body,
+            identity,
+            workload_private_key,
         )
 
         try:
-            response = self._http.post(url, content=body, headers=headers)
+            with suppress_governance_http():
+                response = self._http.post(url, content=body, headers=headers)
+            self._raise_auth_error(response, headers)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.warning("Approval poll failed at %s: %s", url, exc)
@@ -160,7 +256,7 @@ class GovernanceClient:
         data = response.json()
         trace = self._get_trace(api_key)
         if trace:
-            trace.log(APPROVAL_PATH, payload, data)
+            trace.log(httpx.URL(url).path, payload, data)
         return ApprovalResponse.from_dict(data)
 
     def wait_for_approval(
@@ -170,10 +266,19 @@ class GovernanceClient:
         activity_id: str,
         api_key: str,
         identity: AgentIdentity | None = None,
+        *,
+        workload_private_key: str | None = None,
     ) -> GovernanceResponse:
         """Blocking HITL poll loop. Polls until the human decides or the window expires."""
         while True:
-            approval = self.poll_approval(workflow_id, run_id, activity_id, api_key, identity)
+            approval = self.poll_approval(
+                workflow_id,
+                run_id,
+                activity_id,
+                api_key,
+                identity,
+                workload_private_key=workload_private_key,
+            )
 
             if approval.verdict == Verdict.ALLOW:
                 return GovernanceResponse(
@@ -214,27 +319,30 @@ class GovernanceClient:
         payload: dict[str, Any],
         api_key: str,
         identity: AgentIdentity | None = None,
+        *,
+        workload_private_key: str | None = None,
     ) -> GovernanceResponse:
-        """Async POST /api/v1/governance/evaluate using native AsyncClient."""
-        url = f"{self._api_url}{EVALUATE_PATH}"
+        """Async evaluation using the active authentication route and native AsyncClient."""
         body = json.dumps(payload)
-        headers = self.build_request_headers(
-            api_key=api_key,
-            method="POST",
-            pathname=EVALUATE_PATH,
-            body=body,
-            identity=identity,
+        url, headers = await self._aprepare_request(
+            api_key,
+            "POST",
+            EVALUATE_PATH,
+            body,
+            identity,
+            workload_private_key,
         )
 
         try:
-            response = await self._async_http.post(url, content=body, headers=headers)
+            with suppress_governance_http():
+                response = await self._async_http.post(url, content=body, headers=headers)
+            self._raise_auth_error(response, headers)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.warning(
-                "Governance API returned %s for %s: %s",
+                "Governance API returned %s for %s",
                 exc.response.status_code,
                 url,
-                exc.response.text[:200],
             )
             return self._handle_api_error(exc)
         except httpx.HTTPError as exc:
@@ -244,7 +352,7 @@ class GovernanceClient:
         data = response.json()
         trace = self._get_trace(api_key)
         if trace:
-            trace.log(EVALUATE_PATH, payload, data)
+            trace.log(httpx.URL(url).path, payload, data)
         gov_response = GovernanceResponse.from_dict(data)
 
         if gov_response.fallback_used and self._config.on_fallback == "fail_closed":
@@ -262,25 +370,29 @@ class GovernanceClient:
         activity_id: str,
         api_key: str,
         identity: AgentIdentity | None = None,
+        *,
+        workload_private_key: str | None = None,
     ) -> ApprovalResponse:
-        """Async single poll: POST /api/v1/governance/approval."""
-        url = f"{self._api_url}{APPROVAL_PATH}"
+        """Async approval poll using the active authentication route."""
         payload = {
             "workflow_id": workflow_id,
             "run_id": run_id,
             "activity_id": activity_id,
         }
         body = json.dumps(payload)
-        headers = self.build_request_headers(
-            api_key=api_key,
-            method="POST",
-            pathname=APPROVAL_PATH,
-            body=body,
-            identity=identity,
+        url, headers = await self._aprepare_request(
+            api_key,
+            "POST",
+            APPROVAL_PATH,
+            body,
+            identity,
+            workload_private_key,
         )
 
         try:
-            response = await self._async_http.post(url, content=body, headers=headers)
+            with suppress_governance_http():
+                response = await self._async_http.post(url, content=body, headers=headers)
+            self._raise_auth_error(response, headers)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.warning("Approval poll failed at %s: %s", url, exc)
@@ -289,7 +401,7 @@ class GovernanceClient:
         data = response.json()
         trace = self._get_trace(api_key)
         if trace:
-            trace.log(APPROVAL_PATH, payload, data)
+            trace.log(httpx.URL(url).path, payload, data)
         return ApprovalResponse.from_dict(data)
 
     async def await_for_approval(
@@ -299,11 +411,18 @@ class GovernanceClient:
         activity_id: str,
         api_key: str,
         identity: AgentIdentity | None = None,
+        *,
+        workload_private_key: str | None = None,
     ) -> GovernanceResponse:
         """Async HITL poll loop. Uses asyncio.sleep instead of time.sleep."""
         while True:
             approval = await self.apoll_approval(
-                workflow_id, run_id, activity_id, api_key, identity
+                workflow_id,
+                run_id,
+                activity_id,
+                api_key,
+                identity,
+                workload_private_key=workload_private_key,
             )
 
             if approval.verdict == Verdict.ALLOW:
@@ -342,10 +461,12 @@ class GovernanceClient:
 
     def close(self) -> None:
         self._http.close()
+        self._workload_auth.clear()
 
     async def aclose(self) -> None:
         await self._async_http.aclose()
         self._http.close()
+        self._workload_auth.clear()
 
     def __enter__(self) -> GovernanceClient:
         return self

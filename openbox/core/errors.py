@@ -12,15 +12,27 @@ class OpenBoxConfigError(OpenBoxError):
 
 
 class OpenBoxAuthError(OpenBoxError):
-    """API key format or validation failure."""
+    """API key or workload identity authentication failure."""
+
+
+class OpenBoxSigningError(OpenBoxAuthError):
+    """Identity proof rejected by Core, retaining its machine-readable reason code."""
+
+    def __init__(self, message: str, reason_code: str | None = None) -> None:
+        self.reason_code = reason_code
+        super().__init__(message)
 
 
 class OpenBoxNetworkError(OpenBoxError):
-    """Cannot reach the Core API during initialization."""
+    """Cannot reach Core during initialization or establish workload authentication."""
 
 
 class OpenBoxInsecureURLError(OpenBoxError):
     """HTTP used for a non-localhost URL."""
+
+
+# Authentication setup failures must not enter governance's fail-open handling.
+IDENTITY_ERRORS = (OpenBoxAuthError, OpenBoxConfigError, OpenBoxNetworkError)
 
 
 class GovernanceAPIError(OpenBoxError):

@@ -1,6 +1,6 @@
 # OpenBox CrewAI SDK
 
-`openbox-crewai-sdk-python` adds OpenBox governance, approvals, guardrails, and OpenTelemetry-backed operational telemetry to CrewAI crews and flows. When an agent is configured with an AIP DID and private key, governance requests are signed per agent.
+`openbox-crewai-sdk-python` adds OpenBox governance, approvals, guardrails, and OpenTelemetry-backed operational telemetry to CrewAI crews and flows. It supports per-agent IAM v3 workload authentication and legacy AIP DID request signing.
 
 Use it when you need to:
 
@@ -9,6 +9,7 @@ Use it when you need to:
 - apply input and output guardrails
 - attach HTTP, database, and file telemetry to governed runs
 - enable per-agent AIP request signing when DID credentials are configured
+- authenticate IAM v3 workloads using the agent's registered RSA private key
 
 ## Requirements
 
@@ -20,7 +21,7 @@ When you provision an agent in the OpenBox Platform you receive:
 
 - an OpenBox API URL
 - an API key (`obx_live_...`)
-- an AIP DID and one-time private key
+- identity credentials appropriate to the agent: a registered workload RSA key for IAM v3, or an AIP DID and Ed25519 private key for legacy signing
 
 ## Installation
 
@@ -28,17 +29,64 @@ When you provision an agent in the OpenBox Platform you receive:
 pip install openbox-crewai-sdk-python
 ```
 
-Required environment variables (one set per agent — the prefix matches the `env_prefix` passed to each `OpenBoxAgent`):
+Configure the API URL and each agent's API key. The prefix matches the `env_prefix` passed to its `OpenBoxAgent`:
 
 ```bash
 export OPENBOX_URL="<your OpenBox API URL>"
 
 export OPENBOX_RESEARCHER_API_KEY="obx_live_..."
-export OPENBOX_RESEARCHER_DID="did:aip:..."
-export OPENBOX_RESEARCHER_PRIVATE_KEY="<base64 32-byte ed25519 seed>"
+
+# For IAM v3: PEM contents of the RSA key registered for this agent
+export OPENBOX_RESEARCHER_WORKLOAD_PRIVATE_KEY="$(cat /path/to/workload-private-key.pem)"
 ```
 
-The DID and private key are returned once at agent creation and cannot be recovered later. If you enable AIP signing, store them with the same care as the API key.
+Legacy AIP signing remains available through `OPENBOX_RESEARCHER_DID` and
+`OPENBOX_RESEARCHER_PRIVATE_KEY` (a base64 Ed25519 seed), configured together.
+Treat private keys with the same care as the API key.
+
+## IAM v3 workload identity
+
+The workload key can also be passed directly when constructing an agent:
+
+```python
+import os
+from openbox import OpenBoxAgent
+
+researcher = OpenBoxAgent(
+    role="Researcher",
+    goal="Research the requested topic",
+    backstory="You are a research analyst.",
+    env_prefix="OPENBOX_RESEARCHER",
+    workload_private_key=os.environ["OPENBOX_RESEARCHER_WORKLOAD_PRIVATE_KEY"],
+)
+```
+
+Resolution is the explicit argument, then `{env_prefix}_WORKLOAD_PRIVATE_KEY`,
+then `OPENBOX_CREWAI_WORKLOAD_PRIVATE_KEY`, then `OPENBOX_WORKLOAD_PRIVATE_KEY`.
+The value is PEM contents, not a file path. Use each agent's own registered key
+when a crew contains multiple workload identities. Empty or invalid configured
+keys raise `OpenBoxConfigError` instead of falling through to another source.
+
+At `engine.govern(crew)`, the SDK validates the key locally, fetches
+`/api/v3/auth/bootstrap`, and exchanges an RSA-signed `private_key_jwt` for a
+short-lived Keycloak token. Validation, governance evaluation, and approval
+requests then use the `/api/v3` endpoints with the API key in `Authorization`
+and the token in `X-OpenBox-Workload-Token`. OpenBox-, Okta-, and Entra-managed
+workload identities follow the same contract. Tokens are isolated by agent
+credentials, cached for at most five minutes, and refreshed before expiry.
+Sync and async execution share the cache; SDK-owned auth traffic is excluded
+from instrumentation and body capture.
+
+Authentication failures always raise `OpenBoxAuthError`, including when
+`governance_policy="fail_open"`. Its subclass `OpenBoxSigningError` retains
+Core's `reason_code`. Invalid bootstrap/token metadata raises `OpenBoxConfigError`;
+bootstrap/token outages raise `OpenBoxNetworkError`. These errors propagate
+through lifecycle events, operation hooks, delegation, and approval polling.
+
+For rolling upgrades, bootstrap HTTP 404 or HTTP 409 with
+`workload_identity_unavailable` preserves the configured legacy API-key/DID
+route. Other failures do not downgrade. Without a workload key, existing
+API-key/DID authentication continues to use v1.
 
 ## Quick Start
 
@@ -114,7 +162,7 @@ It also captures operational spans for:
 Important production behavior:
 
 - when DID credentials are configured, governance requests are signed with the agent's AIP DID and verified by OpenBox before evaluation
-- on OpenBox API errors the configured fallback policy decides whether execution halts or continues
+- on governance API outages the configured fallback policy decides whether execution halts or continues; authentication and workload setup failures always raise
 
 ## Configuration Highlights
 

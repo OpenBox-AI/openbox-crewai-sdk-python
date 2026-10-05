@@ -25,7 +25,7 @@ from crewai.tools.agent_tools.delegate_work_tool import DelegateWorkTool
 from crewai.tools.base_tool import BaseTool
 from crewai.utilities.i18n import I18N, get_i18n
 
-from openbox.core.errors import GovernanceBlockedError, GovernanceHaltError
+from openbox.core.errors import IDENTITY_ERRORS, GovernanceBlockedError, GovernanceHaltError
 
 
 class _OpenBoxAgentToolMixin:
@@ -61,7 +61,7 @@ class _OpenBoxAgentToolMixin:
         )
         try:
             return selected.execute_task(delegated, context)
-        except (GovernanceHaltError, GovernanceBlockedError):
+        except (*IDENTITY_ERRORS, GovernanceHaltError, GovernanceBlockedError):
             raise
         except Exception as e:
             return self.i18n.errors("agent_tool_execution_error").format(  # type: ignore[attr-defined]

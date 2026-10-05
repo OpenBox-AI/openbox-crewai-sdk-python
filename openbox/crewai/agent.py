@@ -11,7 +11,7 @@ from typing import Any
 
 from crewai import Agent, Task
 from opentelemetry import trace
-from pydantic import PrivateAttr
+from pydantic import Field, PrivateAttr, SecretStr
 
 from openbox.core.aip_signing import (
     AgentIdentity,
@@ -21,6 +21,7 @@ from openbox.core.aip_signing import (
 from openbox.core.client import GovernanceClient
 from openbox.core.config import GovernanceConfig
 from openbox.core.errors import (
+    IDENTITY_ERRORS,
     GovernanceBlockedError,
     GovernanceHaltError,
     OpenBoxConfigError,
@@ -36,6 +37,7 @@ from openbox.core.payloads import (
 )
 from openbox.core.types import AgentContext, GovernanceResponse, Verdict
 from openbox.core.verdict_handler import resolve_verdict, resolve_verdict_async
+from openbox.core.workload_identity import parse_optional_workload_private_key
 from openbox.crewai.task import OpenBoxTask
 from openbox.engine import OpenBoxEngine
 from openbox.instrumentation.interceptors._runtime import (
@@ -66,9 +68,11 @@ def _description_from_activity_input(
 
 class OpenBoxAgent(Agent):
     env_prefix: str
+    workload_private_key: SecretStr | None = Field(default=None, repr=False, exclude=True)
 
     _openbox_api_key: str = PrivateAttr(default="")
     _openbox_identity: AgentIdentity | None = PrivateAttr(default=None)
+    _openbox_workload_private_key: str | None = PrivateAttr(default=None)
     _session_id: str | None = PrivateAttr(default=None)
     _run_id: str | None = PrivateAttr(default=None)
     _halted: bool = PrivateAttr(default=False)
@@ -120,7 +124,12 @@ class OpenBoxAgent(Agent):
             signal_name=signal_name,
             signal_args=signal_args,
         )
-        client.evaluate(payload.to_dict(), self._openbox_api_key, self._openbox_identity)
+        client.evaluate(
+            payload.to_dict(),
+            self._openbox_api_key,
+            self._openbox_identity,
+            workload_private_key=self._openbox_workload_private_key,
+        )
 
     async def _aemit_signal(
         self,
@@ -139,7 +148,12 @@ class OpenBoxAgent(Agent):
             signal_name=signal_name,
             signal_args=signal_args,
         )
-        await client.aevaluate(payload.to_dict(), self._openbox_api_key, self._openbox_identity)
+        await client.aevaluate(
+            payload.to_dict(),
+            self._openbox_api_key,
+            self._openbox_identity,
+            workload_private_key=self._openbox_workload_private_key,
+        )
 
     def _should_emit_handoff(self, handoff_origin_did: str | None) -> bool:
         if not handoff_origin_did:
@@ -177,6 +191,7 @@ class OpenBoxAgent(Agent):
         validate_api_key_format(key, api_key_env)
         self._openbox_api_key = key
         self._openbox_identity = self._resolve_identity()
+        self._openbox_workload_private_key = self._resolve_workload_private_key()
 
         self._governance_client = client
         self._governance_engine = engine
@@ -207,6 +222,7 @@ class OpenBoxAgent(Agent):
             ctx = current.get_span_context()
             if ctx is None or not ctx.trace_id:
                 return
+            sp.raise_identity_error(ctx.trace_id, role)
             info = sp.get_block_info_for_agent(ctx.trace_id, role)
             if info:
                 raise_governance_block(info, subject="LLM call")
@@ -218,6 +234,7 @@ class OpenBoxAgent(Agent):
         llm.call = governed_call
 
         if original_acall is not None:
+
             async def governed_acall(*args: Any, **kwargs: Any) -> Any:
                 _check()
                 return await original_acall(*args, **kwargs)
@@ -225,6 +242,24 @@ class OpenBoxAgent(Agent):
             llm.acall = governed_acall
 
         llm._openbox_pre_check_installed = True
+
+    def _resolve_workload_private_key(self) -> str | None:
+        if self.workload_private_key is not None:
+            value = self.workload_private_key.get_secret_value()
+        else:
+            value = next(
+                (
+                    os.environ[name]
+                    for name in (
+                        self._env_var("WORKLOAD_PRIVATE_KEY"),
+                        "OPENBOX_CREWAI_WORKLOAD_PRIVATE_KEY",
+                        "OPENBOX_WORKLOAD_PRIVATE_KEY",
+                    )
+                    if name in os.environ
+                ),
+                None,
+            )
+        return parse_optional_workload_private_key(value)
 
     def _resolve_identity(self) -> AgentIdentity | None:
         did_env = self._env_var("DID")
@@ -309,7 +344,10 @@ class OpenBoxAgent(Agent):
                     handoff_payload.to_dict(),
                     self._openbox_api_key,
                     self._openbox_identity,
+                    workload_private_key=self._openbox_workload_private_key,
                 )
+            except IDENTITY_ERRORS:
+                raise
             except Exception as exc:  # never block work on telemetry
                 logger.warning("Handoff emission failed: %s", exc)
 
@@ -357,6 +395,7 @@ class OpenBoxAgent(Agent):
                 crew_execution_id=self._crew_execution_id,
                 multi_agent_session_id=_multi_agent_session_id_var.get(),
                 identity=self._openbox_identity,
+                workload_private_key=self._openbox_workload_private_key,
             )
             activity_ctx = {
                 "activity_id": activity_id,
@@ -364,17 +403,13 @@ class OpenBoxAgent(Agent):
             }
             self._span_processor.register_trace(trace_id, agent_ctx)
             self._span_processor.set_activity_context(trace_id, activity_ctx)
-            existing = self._span_processor.get_block_info_for_agent(
-                trace_id, self.role
-            )
+            existing = self._span_processor.get_block_info_for_agent(trace_id, self.role)
             if existing:
                 raise_governance_block(existing, subject="LLM call")
 
             _llm_allowed_var.set(True)
             _llm_block_info_var.set(None)
-            origin_did = (
-                self._openbox_identity.did if self._openbox_identity else None
-            )
+            origin_did = self._openbox_identity.did if self._openbox_identity else None
             origin_token = _handoff_origin_did_var.set(origin_did)
             frame_token = set_current_execution_frame(agent_ctx, activity_ctx)
             try:
@@ -382,22 +417,18 @@ class OpenBoxAgent(Agent):
             except (GovernanceBlockedError, GovernanceHaltError):
                 raise
             except Exception:
-                info = (
-                    self._span_processor.get_block_info_for_activity(activity_id)
-                    or self._span_processor.get_block_info_for_agent(
-                        trace_id, self.role
-                    )
-                )
+                self._span_processor.raise_identity_error(trace_id, self.role)
+                info = self._span_processor.get_block_info_for_activity(
+                    activity_id
+                ) or self._span_processor.get_block_info_for_agent(trace_id, self.role)
                 if info:
                     raise_governance_block(info, subject="LLM call")
                 raise
             else:
-                info = (
-                    self._span_processor.get_block_info_for_activity(activity_id)
-                    or self._span_processor.get_block_info_for_agent(
-                        trace_id, self.role
-                    )
-                )
+                self._span_processor.raise_identity_error(trace_id, self.role)
+                info = self._span_processor.get_block_info_for_activity(
+                    activity_id
+                ) or self._span_processor.get_block_info_for_agent(trace_id, self.role)
                 if info:
                     raise_governance_block(info, subject="LLM call")
             finally:
@@ -442,7 +473,12 @@ class OpenBoxAgent(Agent):
             metadata=metadata,
         )
 
-        response = client.evaluate(payload.to_dict(), self._openbox_api_key, self._openbox_identity)
+        response = client.evaluate(
+            payload.to_dict(),
+            self._openbox_api_key,
+            self._openbox_identity,
+            workload_private_key=self._openbox_workload_private_key,
+        )
 
         response = resolve_verdict(
             response,
@@ -455,6 +491,7 @@ class OpenBoxAgent(Agent):
                 activity_id,
                 self._openbox_api_key,
                 self._openbox_identity,
+                workload_private_key=self._openbox_workload_private_key,
             ),
         )
 
@@ -502,7 +539,12 @@ class OpenBoxAgent(Agent):
             metadata=metadata,
         )
 
-        response = client.evaluate(payload.to_dict(), self._openbox_api_key, self._openbox_identity)
+        response = client.evaluate(
+            payload.to_dict(),
+            self._openbox_api_key,
+            self._openbox_identity,
+            workload_private_key=self._openbox_workload_private_key,
+        )
 
         response = resolve_verdict(
             response,
@@ -515,6 +557,7 @@ class OpenBoxAgent(Agent):
                 activity_id,
                 self._openbox_api_key,
                 self._openbox_identity,
+                workload_private_key=self._openbox_workload_private_key,
             ),
         )
 
@@ -609,7 +652,10 @@ class OpenBoxAgent(Agent):
                     handoff_payload.to_dict(),
                     self._openbox_api_key,
                     self._openbox_identity,
+                    workload_private_key=self._openbox_workload_private_key,
                 )
+            except IDENTITY_ERRORS:
+                raise
             except Exception as exc:
                 logger.warning("Handoff emission failed: %s", exc)
 
@@ -657,6 +703,7 @@ class OpenBoxAgent(Agent):
                 crew_execution_id=self._crew_execution_id,
                 multi_agent_session_id=_multi_agent_session_id_var.get(),
                 identity=self._openbox_identity,
+                workload_private_key=self._openbox_workload_private_key,
             )
             activity_ctx = {
                 "activity_id": activity_id,
@@ -664,17 +711,13 @@ class OpenBoxAgent(Agent):
             }
             self._span_processor.register_trace(trace_id, agent_ctx)
             self._span_processor.set_activity_context(trace_id, activity_ctx)
-            existing = self._span_processor.get_block_info_for_agent(
-                trace_id, self.role
-            )
+            existing = self._span_processor.get_block_info_for_agent(trace_id, self.role)
             if existing:
                 raise_governance_block(existing, subject="LLM call")
 
             _llm_allowed_var.set(True)
             _llm_block_info_var.set(None)
-            origin_did = (
-                self._openbox_identity.did if self._openbox_identity else None
-            )
+            origin_did = self._openbox_identity.did if self._openbox_identity else None
             origin_token = _handoff_origin_did_var.set(origin_did)
             frame_token = set_current_execution_frame(agent_ctx, activity_ctx)
             try:
@@ -682,22 +725,18 @@ class OpenBoxAgent(Agent):
             except (GovernanceBlockedError, GovernanceHaltError):
                 raise
             except Exception:
-                info = (
-                    self._span_processor.get_block_info_for_activity(activity_id)
-                    or self._span_processor.get_block_info_for_agent(
-                        trace_id, self.role
-                    )
-                )
+                self._span_processor.raise_identity_error(trace_id, self.role)
+                info = self._span_processor.get_block_info_for_activity(
+                    activity_id
+                ) or self._span_processor.get_block_info_for_agent(trace_id, self.role)
                 if info:
                     raise_governance_block(info, subject="LLM call")
                 raise
             else:
-                info = (
-                    self._span_processor.get_block_info_for_activity(activity_id)
-                    or self._span_processor.get_block_info_for_agent(
-                        trace_id, self.role
-                    )
-                )
+                self._span_processor.raise_identity_error(trace_id, self.role)
+                info = self._span_processor.get_block_info_for_activity(
+                    activity_id
+                ) or self._span_processor.get_block_info_for_agent(trace_id, self.role)
                 if info:
                     raise_governance_block(info, subject="LLM call")
             finally:
@@ -743,7 +782,10 @@ class OpenBoxAgent(Agent):
         )
 
         response = await client.aevaluate(
-            payload.to_dict(), self._openbox_api_key, self._openbox_identity
+            payload.to_dict(),
+            self._openbox_api_key,
+            self._openbox_identity,
+            workload_private_key=self._openbox_workload_private_key,
         )
 
         response = await resolve_verdict_async(
@@ -757,6 +799,7 @@ class OpenBoxAgent(Agent):
                 activity_id,
                 self._openbox_api_key,
                 self._openbox_identity,
+                workload_private_key=self._openbox_workload_private_key,
             ),
         )
 
@@ -805,7 +848,10 @@ class OpenBoxAgent(Agent):
         )
 
         response = await client.aevaluate(
-            payload.to_dict(), self._openbox_api_key, self._openbox_identity
+            payload.to_dict(),
+            self._openbox_api_key,
+            self._openbox_identity,
+            workload_private_key=self._openbox_workload_private_key,
         )
 
         response = await resolve_verdict_async(
@@ -819,6 +865,7 @@ class OpenBoxAgent(Agent):
                 activity_id,
                 self._openbox_api_key,
                 self._openbox_identity,
+                workload_private_key=self._openbox_workload_private_key,
             ),
         )
 
@@ -878,7 +925,12 @@ class OpenBoxAgent(Agent):
                 agent_role=self.role,
                 metadata=metadata,
             )
-            await client.aevaluate(payload.to_dict(), self._openbox_api_key, self._openbox_identity)
+            await client.aevaluate(
+                payload.to_dict(),
+                self._openbox_api_key,
+                self._openbox_identity,
+                workload_private_key=self._openbox_workload_private_key,
+            )
             self._session_started = True
 
         logger.info("Session started for agent %r (session=%s)", self.role, self._session_id)
@@ -910,7 +962,12 @@ class OpenBoxAgent(Agent):
             status=status,
             metadata=metadata,
         )
-        await client.aevaluate(payload.to_dict(), self._openbox_api_key, self._openbox_identity)
+        await client.aevaluate(
+            payload.to_dict(),
+            self._openbox_api_key,
+            self._openbox_identity,
+            workload_private_key=self._openbox_workload_private_key,
+        )
         logger.info(
             "Session closed for agent %r (session=%s, status=%s)",
             self.role,
@@ -941,7 +998,12 @@ class OpenBoxAgent(Agent):
                 agent_role=self.role,
                 metadata=metadata,
             )
-            client.evaluate(payload.to_dict(), self._openbox_api_key, self._openbox_identity)
+            client.evaluate(
+                payload.to_dict(),
+                self._openbox_api_key,
+                self._openbox_identity,
+                workload_private_key=self._openbox_workload_private_key,
+            )
             self._session_started = True
 
         logger.info("Session started for agent %r (session=%s)", self.role, self._session_id)
@@ -973,7 +1035,12 @@ class OpenBoxAgent(Agent):
             status=status,
             metadata=metadata,
         )
-        client.evaluate(payload.to_dict(), self._openbox_api_key, self._openbox_identity)
+        client.evaluate(
+            payload.to_dict(),
+            self._openbox_api_key,
+            self._openbox_identity,
+            workload_private_key=self._openbox_workload_private_key,
+        )
         logger.info(
             "Session closed for agent %r (session=%s, status=%s)",
             self.role,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import uuid
 from typing import Any
 
@@ -16,6 +17,7 @@ from pydantic import PrivateAttr
 from openbox.core.client import GovernanceClient
 from openbox.core.config import GovernanceConfig
 from openbox.core.errors import (
+    IDENTITY_ERRORS,
     GovernanceAPIError,
     GovernanceApprovalExpiredError,
     GovernanceBlockedError,
@@ -38,6 +40,7 @@ def _register_passthrough_exceptions() -> None:
     import crewai.agent.core as _core
 
     governance_exceptions = (
+        *IDENTITY_ERRORS,
         GovernanceHaltError,
         GovernanceBlockedError,
         GovernanceAPIError,
@@ -306,6 +309,8 @@ class GovernedCrew(Crew):
                         status="halted" if agent._halted else "completed",
                         force=True,
                     )
+                except IDENTITY_ERRORS:
+                    raise
                 except Exception:
                     logger.exception("Error closing leftover session for agent %r", agent.role)
             agent._reset_run_state()
@@ -326,11 +331,14 @@ class GovernedCrew(Crew):
                         status="halted" if agent._halted else "completed",
                         force=True,
                     )
+                except IDENTITY_ERRORS:
+                    raise
                 except Exception:
                     logger.exception("Error closing leftover session for agent %r", agent.role)
             agent._reset_run_state()
 
     async def _acleanup(self, crew_name: str, metadata: dict[str, Any]) -> None:
+        identity_error: Exception | None = None
         if self._governance_client:
             for agent in self._governed_agents():
                 if agent._session_started:
@@ -342,6 +350,8 @@ class GovernedCrew(Crew):
                             metadata,
                             status=status,
                         )
+                    except IDENTITY_ERRORS as exc:
+                        identity_error = identity_error or exc
                     except Exception:
                         logger.exception("Error closing session for agent %r", agent.role)
                 agent._reset_run_state()
@@ -350,7 +360,12 @@ class GovernedCrew(Crew):
             unregister_before_llm_call_hook(self._llm_hook)
             self._llm_hook = None
 
+        # Finish cleanup for every agent, preserving an already-active failure.
+        if identity_error is not None and sys.exc_info()[1] is None:
+            raise identity_error
+
     def _cleanup(self, crew_name: str, metadata: dict[str, Any]) -> None:
+        identity_error: Exception | None = None
         if self._governance_client:
             for agent in self._governed_agents():
                 if agent._session_started:
@@ -362,6 +377,8 @@ class GovernedCrew(Crew):
                             metadata,
                             status=status,
                         )
+                    except IDENTITY_ERRORS as exc:
+                        identity_error = identity_error or exc
                     except Exception:
                         logger.exception("Error closing session for agent %r", agent.role)
                 agent._reset_run_state()
@@ -369,6 +386,10 @@ class GovernedCrew(Crew):
         if self._llm_hook:
             unregister_before_llm_call_hook(self._llm_hook)
             self._llm_hook = None
+
+        # Finish cleanup for every agent, preserving an already-active failure.
+        if identity_error is not None and sys.exc_info()[1] is None:
+            raise identity_error
 
 
 def _make_llm_hook() -> Any:
