@@ -61,7 +61,7 @@ Distinct agents in one crew can have distinct identities. Omit both DID fields o
 | Component | Requirement |
 | --- | --- |
 | Python | `>=3.10` |
-| CrewAI | `>=1.14.1` |
+| CrewAI | `>=1.15.23` |
 | OpenBox Core | reachable over HTTPS (HTTP allowed for localhost) |
 
 ## Reading order

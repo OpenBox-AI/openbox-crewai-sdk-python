@@ -14,7 +14,7 @@ Use it when you need to:
 ## Requirements
 
 - Python `>=3.10,<3.14`
-- `crewai >=1.14.1`
+- `crewai >=1.15.23`
 - an OpenBox account with each agent provisioned in the OpenBox Platform
 
 When you provision an agent in the OpenBox Platform you receive:

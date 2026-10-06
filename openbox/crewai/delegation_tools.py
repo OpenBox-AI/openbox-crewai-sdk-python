@@ -6,7 +6,7 @@ GovernanceHaltError, hands a stringified error to the parent's LLM, and lets
 the crew/flow continue past a HALT verdict. These subclasses narrow the catch
 so HALT propagates while every other failure mode keeps upstream behaviour.
 
-Verified against crewai==1.14.x. When bumping crewai, re-verify:
+Verified against crewai==1.15.23. When bumping crewai, re-verify:
   - base_agent_tools.py still has `except Exception as e:` around execute_task
   - i18n keys 'agent_tool_unexisting_coworker', 'agent_tool_execution_error',
     'manager_request' still exist
@@ -21,9 +21,11 @@ from typing import Any, cast
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.task import Task
 from crewai.tools.agent_tools.ask_question_tool import AskQuestionTool
+from crewai.tools.agent_tools.base_agent_tools import BaseAgentTool
 from crewai.tools.agent_tools.delegate_work_tool import DelegateWorkTool
 from crewai.tools.base_tool import BaseTool
 from crewai.utilities.i18n import I18N, get_i18n
+from pydantic import Field
 
 from openbox.core.errors import IDENTITY_ERRORS, GovernanceBlockedError, GovernanceHaltError
 
@@ -32,23 +34,26 @@ class _OpenBoxAgentToolMixin:
     """Re-raise governance halt/block errors; fall through to upstream
     string-error behaviour for everything else."""
 
+    i18n: I18N
+
     def _strict_execute(
         self,
         agent_name: str | None,
         task: str,
         context: str | None,
     ) -> str:
-        sanitized = self.sanitize_agent_name(agent_name or "")  # type: ignore[attr-defined]
+        tool = cast(BaseAgentTool, self)
+        sanitized = tool.sanitize_agent_name(agent_name or "")
         match = [
             a
-            for a in self.agents  # type: ignore[attr-defined]
-            if self.sanitize_agent_name(a.role) == sanitized  # type: ignore[attr-defined]
+            for a in tool.agents
+            if tool.sanitize_agent_name(a.role) == sanitized
         ]
         if not match:
-            return self.i18n.errors("agent_tool_unexisting_coworker").format(  # type: ignore[attr-defined]
+            return self.i18n.errors("agent_tool_unexisting_coworker").format(
                 coworkers="\n".join(
-                    f"- {self.sanitize_agent_name(a.role)}"  # type: ignore[attr-defined]
-                    for a in self.agents  # type: ignore[attr-defined]
+                    f"- {tool.sanitize_agent_name(a.role)}"
+                    for a in tool.agents
                 ),
                 error=f"No agent found with role '{sanitized}'",
             )
@@ -56,21 +61,23 @@ class _OpenBoxAgentToolMixin:
         delegated = Task(
             description=task,
             agent=selected,
-            expected_output=selected.i18n.slice("manager_request"),
-            i18n=selected.i18n,
+            expected_output=self.i18n.slice("manager_request"),
         )
         try:
             return selected.execute_task(delegated, context)
         except (*IDENTITY_ERRORS, GovernanceHaltError, GovernanceBlockedError):
             raise
         except Exception as e:
-            return self.i18n.errors("agent_tool_execution_error").format(  # type: ignore[attr-defined]
-                agent_role=self.sanitize_agent_name(selected.role),  # type: ignore[attr-defined]
+            return self.i18n.errors("agent_tool_execution_error").format(
+                agent_role=tool.sanitize_agent_name(selected.role),
                 error=str(e),
             )
 
 
 class OpenBoxDelegateWorkTool(_OpenBoxAgentToolMixin, DelegateWorkTool):
+    # CrewAI removed this field; retain the OpenBox factory's custom prompts.
+    i18n: I18N = Field(default_factory=get_i18n, exclude=True)
+
     def _run(
         self,
         task: str,
@@ -84,6 +91,8 @@ class OpenBoxDelegateWorkTool(_OpenBoxAgentToolMixin, DelegateWorkTool):
 
 
 class OpenBoxAskQuestionTool(_OpenBoxAgentToolMixin, AskQuestionTool):
+    i18n: I18N = Field(default_factory=get_i18n, exclude=True)
+
     def _run(
         self,
         question: str,

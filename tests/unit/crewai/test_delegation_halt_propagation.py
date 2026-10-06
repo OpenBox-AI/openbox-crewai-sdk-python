@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -78,3 +80,31 @@ def test_openbox_agent_returns_openbox_delegation_tools() -> None:
     agent = make_agent()
     tools = agent.get_delegation_tools([_make_real_agent()])
     assert any(isinstance(t, OpenBoxDelegateWorkTool) for t in tools)
+
+
+def test_delegation_tools_preserve_custom_prompts(tmp_path: Path) -> None:
+    from crewai.utilities.i18n import I18N, get_i18n
+
+    from openbox.crewai.delegation_tools import make_openbox_delegation_tools
+
+    prompts = json.loads(json.dumps(get_i18n()._prompts))
+    prompts["errors"]["agent_tool_unexisting_coworker"] = "Missing: {coworkers}"
+    prompts["errors"]["agent_tool_execution_error"] = "Failed: {error}"
+    prompts["slices"]["manager_request"] = "Custom expected output"
+    prompt_file = tmp_path / "prompts.json"
+    prompt_file.write_text(json.dumps(prompts))
+    i18n = I18N(prompt_file=str(prompt_file))
+    agent = _make_real_agent()
+    delegated_tasks = []
+
+    def fail(task: Any, _context: Any = None) -> str:
+        delegated_tasks.append(task)
+        raise RuntimeError("boom")
+
+    object.__setattr__(agent, "execute_task", fail)
+    for tool in make_openbox_delegation_tools([agent], i18n=i18n):
+        assert tool._run("task", "context", coworker="unknown") == "Missing: - worker"
+        assert tool._run("task", "context", coworker="Worker") == "Failed: boom"
+
+    assert len(delegated_tasks) == 2
+    assert all(task.expected_output == "Custom expected output" for task in delegated_tasks)
