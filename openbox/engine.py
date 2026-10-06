@@ -88,21 +88,25 @@ class OpenBoxEngine:
         }
 
     def validate_agent_api_keys(self, agents: list[Any]) -> None:
-        seen_envs: set[str] = set()
+        seen_credentials: set[tuple[Any, ...]] = set()
         for agent in agents:
             env_prefix = getattr(agent, "env_prefix", "")
             env_name = f"{str(env_prefix).rstrip('_')}_API_KEY"
-            if env_name in seen_envs:
-                continue
-            seen_envs.add(env_name)
-
             key = os.environ.get(env_name)
             if not key:
                 raise OpenBoxConfigError(f"Environment variable {env_name!r} is not set")
             validate_api_key_format(key, env_name)
 
             identity = agent._resolve_identity() if hasattr(agent, "_resolve_identity") else None
-            self.client.validate_api_key(key, identity)
+            workload_key = (
+                agent._resolve_workload_private_key()
+                if hasattr(agent, "_resolve_workload_private_key") else None
+            )
+            credentials = (env_name, key, identity, workload_key)
+            if credentials in seen_credentials:
+                continue
+            self.client.validate_api_key(key, identity, workload_private_key=workload_key)
+            seen_credentials.add(credentials)
 
     def govern(self, crew: Crew) -> GovernedCrew:
         governed_crew = self._to_governed_crew(crew)

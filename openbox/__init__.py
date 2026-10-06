@@ -19,6 +19,7 @@ from openbox.core.errors import (
     OpenBoxError,
     OpenBoxInsecureURLError,
     OpenBoxNetworkError,
+    OpenBoxSigningError,
 )
 from openbox.core.types import GovernanceResponse, Verdict
 from openbox.crewai.agent import OpenBoxAgent
@@ -42,6 +43,7 @@ __all__ = [
     "OpenBoxError",
     "OpenBoxConfigError",
     "OpenBoxAuthError",
+    "OpenBoxSigningError",
     "OpenBoxNetworkError",
     "OpenBoxInsecureURLError",
     "GovernanceAPIError",

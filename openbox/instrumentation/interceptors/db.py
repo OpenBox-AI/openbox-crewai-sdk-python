@@ -21,6 +21,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from opentelemetry import trace as otel_trace
 
+from openbox.core.errors import IDENTITY_ERRORS
+
 logger = logging.getLogger(__name__)
 
 # Track installed wrapt patches (informational — wrapt patches can't be cleanly removed)
@@ -207,6 +209,8 @@ def _evaluate_db_sync(
     if is_completed:
         try:
             _hook_gov.evaluate_sync(span, identifier=identifier, span_data=span_data)
+        except IDENTITY_ERRORS:
+            raise
         except Exception as e:
             logger.debug(f"DB governance completed evaluation error (non-blocking): {e}")
     else:
@@ -225,6 +229,8 @@ async def _evaluate_db_async(
     if is_completed:
         try:
             await _hook_gov.evaluate_async(span, identifier=identifier, span_data=span_data)
+        except IDENTITY_ERRORS:
+            raise
         except Exception as e:
             logger.debug(f"DB governance completed evaluation error (non-blocking): {e}")
     else:
@@ -268,7 +274,7 @@ def _run_governed_query_sync(
             )
             _evaluate_db_sync(ident, completed_sd, is_completed=True)
             return result
-        except GovernanceBlockedError:
+        except (*IDENTITY_ERRORS, GovernanceBlockedError):
             raise
         except Exception as e:
             duration_ms = (time.perf_counter() - start) * 1000
@@ -326,7 +332,7 @@ async def _run_governed_query_async(
                 )
                 await _evaluate_db_async(ident, completed_sd, is_completed=True)
                 return result
-            except GovernanceBlockedError:
+            except (*IDENTITY_ERRORS, GovernanceBlockedError):
                 raise
             except Exception as e:
                 duration_ms = (time.perf_counter() - start) * 1000
@@ -745,6 +751,8 @@ def setup_pymongo_hooks() -> None:
                     )
                     ident = _db_identifier("mongodb", host, port, event.database_name)
                     _evaluate_db_sync(ident, started_sd)
+                except IDENTITY_ERRORS:
+                    raise
                 except Exception as e:
                     logger.debug(f"pymongo governance started error: {e}")
 
@@ -775,6 +783,8 @@ def setup_pymongo_hooks() -> None:
                     )
                     ident = _db_identifier("mongodb", host, port, event.database_name)
                     _evaluate_db_sync(ident, completed_sd, is_completed=True)
+                except IDENTITY_ERRORS:
+                    raise
                 except Exception as e:
                     logger.debug(f"pymongo governance completed error: {e}")
 

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 import re
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 from urllib.parse import urlparse
+
+from opentelemetry.instrumentation.utils import suppress_instrumentation
 
 from openbox.core.errors import OpenBoxAuthError, OpenBoxInsecureURLError
 
@@ -15,6 +18,25 @@ if TYPE_CHECKING:
     from openbox.core.types import AgentContext
 
 logger = logging.getLogger("openbox")
+
+_governance_http_suppressed: ContextVar[bool] = ContextVar(
+    "openbox_governance_http_suppressed", default=False
+)
+
+
+def is_governance_http_suppressed() -> bool:
+    return _governance_http_suppressed.get()
+
+
+@contextmanager
+def suppress_governance_http() -> Iterator[None]:
+    """Exclude SDK-owned auth/governance traffic from OTel and body capture."""
+    token = _governance_http_suppressed.set(True)
+    try:
+        with suppress_instrumentation():
+            yield
+    finally:
+        _governance_http_suppressed.reset(token)
 
 _API_KEY_PATTERN = re.compile(r"^obx_(live|test)_[a-zA-Z0-9_]+$")
 
@@ -83,6 +105,7 @@ _SENSITIVE_HEADERS = frozenset(
         "set-cookie",
         "x-api-key",
         "x-auth-token",
+        "x-openbox-workload-token",
     }
 )
 

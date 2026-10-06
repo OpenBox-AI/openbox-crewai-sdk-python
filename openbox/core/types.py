@@ -145,3 +145,4 @@ class AgentContext:
     crew_execution_id: str
     multi_agent_session_id: str | None = None
     identity: AgentIdentity | None = None
+    workload_private_key: str | None = field(default=None, repr=False)

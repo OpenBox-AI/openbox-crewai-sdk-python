@@ -21,18 +21,14 @@ def _make_cursor_tracer(
     from opentelemetry import trace
     from opentelemetry.instrumentation.dbapi import CursorTracer, DatabaseApiIntegration
 
-    integration = MagicMock(spec=DatabaseApiIntegration)
-    integration.database_system = db_system
+    integration = DatabaseApiIntegration(
+        name="test-tracer",
+        database_system=db_system,
+        tracer_provider=trace.get_tracer_provider(),
+    )
     integration.database = database
     integration.connection_props = {"host": host, "port": port}
     integration.name = f"{db_system}.{database}"
-    integration.capture_parameters = False
-    integration.enable_commenter = False
-    integration.commenter_options = {}
-    integration.enable_attribute_commenter = False
-    integration.connect_module = MagicMock()
-    integration.span_attributes = {}
-    integration._tracer = trace.get_tracer("test-tracer")
 
     return CursorTracer(integration)
 

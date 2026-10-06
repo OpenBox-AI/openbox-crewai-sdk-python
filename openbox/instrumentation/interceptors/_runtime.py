@@ -11,7 +11,7 @@ from opentelemetry import trace
 
 from openbox.core.client import GovernanceClient
 from openbox.core.config import GovernanceConfig
-from openbox.core.errors import GovernanceAPIError, GovernanceBlockedError
+from openbox.core.errors import IDENTITY_ERRORS, GovernanceAPIError, GovernanceBlockedError
 from openbox.core.payloads import HookPayload
 from openbox.core.spans import SpanData
 from openbox.core.types import AgentContext
@@ -21,6 +21,7 @@ from openbox.utils import (
     _llm_allowed_var,
     _llm_block_info_var,
     build_metadata,
+    is_governance_http_suppressed,
 )
 
 logger = logging.getLogger("openbox")
@@ -70,11 +71,7 @@ class HookRuntime:
                 ignored_url_prefixes=binding["ignored_url_prefixes"],
             )
 
-        if (
-            self.span_processor is None
-            or self.governance_client is None
-            or self.config is None
-        ):
+        if self.span_processor is None or self.governance_client is None or self.config is None:
             return None
         return RuntimeBinding(
             span_processor=self.span_processor,
@@ -85,8 +82,8 @@ class HookRuntime:
 
 
 _runtime: HookRuntime | None = None
-_current_execution_frame: contextvars.ContextVar[ExecutionFrame | None] = (
-    contextvars.ContextVar("openbox_current_execution_frame", default=None)
+_current_execution_frame: contextvars.ContextVar[ExecutionFrame | None] = contextvars.ContextVar(
+    "openbox_current_execution_frame", default=None
 )
 
 
@@ -137,6 +134,8 @@ def get_runtime() -> HookRuntime | None:
 
 
 def should_ignore_url(url: str) -> bool:
+    if is_governance_http_suppressed():
+        return True
     rt = _runtime
     if rt is None:
         return False
@@ -176,6 +175,8 @@ def get_current_span_id() -> int | None:
 
 def evaluate_started(trace_id: int, span_data: SpanData) -> None:
     """Evaluate a started-stage span. Raises GovernanceBlockedError on BLOCK/HALT."""
+    if is_governance_http_suppressed():
+        return
     rt = _runtime
     if rt is None:
         return
@@ -200,6 +201,7 @@ def evaluate_started(trace_id: int, span_data: SpanData) -> None:
         if act_ctx is None:
             return
 
+    sp.raise_identity_error(trace_id, agent_ctx.role)
     if sp.is_aborted(trace_id, agent_ctx.role):
         raise GovernanceBlockedError(
             "Operation blocked — task already aborted",
@@ -227,26 +229,39 @@ def evaluate_started(trace_id: int, span_data: SpanData) -> None:
     )
 
     try:
-        response = client.evaluate(payload.to_dict(), agent_ctx.api_key, agent_ctx.identity)
+        response = client.evaluate(
+            payload.to_dict(),
+            agent_ctx.api_key,
+            agent_ctx.identity,
+            workload_private_key=agent_ctx.workload_private_key,
+        )
+    except IDENTITY_ERRORS as exc:
+        sp.set_identity_error(trace_id, agent_ctx.role, exc)
+        raise
     except GovernanceBlockedError:
         raise
     except (GovernanceAPIError, Exception):
         logger.debug("Error evaluating started hook for %s", span_data.name, exc_info=True)
         return
 
-    response = resolve_verdict(
-        response,
-        "hook",
-        config=config,
-        crew_name=agent_ctx.crew_name,
-        wait_for_approval=lambda: client.wait_for_approval(
-            agent_ctx.session_id,
-            agent_ctx.run_id,
-            task_activity_id,
-            agent_ctx.api_key,
-            agent_ctx.identity,
-        ),
-    )
+    try:
+        response = resolve_verdict(
+            response,
+            "hook",
+            config=config,
+            crew_name=agent_ctx.crew_name,
+            wait_for_approval=lambda: client.wait_for_approval(
+                agent_ctx.session_id,
+                agent_ctx.run_id,
+                task_activity_id,
+                agent_ctx.api_key,
+                agent_ctx.identity,
+                workload_private_key=agent_ctx.workload_private_key,
+            ),
+        )
+    except IDENTITY_ERRORS as exc:
+        sp.set_identity_error(trace_id, agent_ctx.role, exc)
+        raise
 
     if response.verdict.should_stop():
         sp.set_abort(trace_id, agent_ctx.role)
@@ -275,7 +290,9 @@ def evaluate_started(trace_id: int, span_data: SpanData) -> None:
 
 
 def evaluate_completed(trace_id: int, span_data: SpanData) -> None:
-    """Best-effort completed-stage telemetry. Never raises."""
+    """Best-effort completed telemetry, except for authentication failures."""
+    if is_governance_http_suppressed():
+        return
     rt = _runtime
     if rt is None:
         return
@@ -315,6 +332,14 @@ def evaluate_completed(trace_id: int, span_data: SpanData) -> None:
     )
 
     try:
-        client.evaluate(payload.to_dict(), agent_ctx.api_key, agent_ctx.identity)
+        client.evaluate(
+            payload.to_dict(),
+            agent_ctx.api_key,
+            agent_ctx.identity,
+            workload_private_key=agent_ctx.workload_private_key,
+        )
+    except IDENTITY_ERRORS as exc:
+        sp.set_identity_error(trace_id, agent_ctx.role, exc)
+        raise
     except (GovernanceAPIError, Exception):
         logger.debug("Error sending completed hook for %s", span_data.name, exc_info=True)

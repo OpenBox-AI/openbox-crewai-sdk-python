@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from openbox.core.client import GovernanceClient
 from openbox.core.config import GovernanceConfig
+from openbox.core.errors import IDENTITY_ERRORS
 from openbox.core.payloads import HookPayload
 from openbox.core.spans import SpanData
 from openbox.core.types import AgentContext
@@ -19,6 +20,7 @@ from openbox.utils import (
     _llm_allowed_var,
     _llm_block_info_var,
     build_metadata,
+    is_governance_http_suppressed,
     truncate_body,
 )
 
@@ -57,6 +59,7 @@ class GovernanceSpanProcessor(SpanProcessor):
         self._lock = threading.Lock()
         self._agent_contexts: dict[int, AgentContext] = {}
         self._abort_flags: set[tuple[int, str]] = set()
+        self._identity_errors: dict[tuple[int, str], Exception] = {}
         self._block_info_by_activity: dict[str, dict[str, Any]] = {}
         self._block_info_by_agent: dict[tuple[int, str], dict[str, Any]] = {}
         self._body_data: dict[int, dict[str, Any]] = {}
@@ -81,6 +84,16 @@ class GovernanceSpanProcessor(SpanProcessor):
     def is_aborted(self, trace_id: int, agent_role: str) -> bool:
         with self._lock:
             return (trace_id, agent_role) in self._abort_flags
+
+    def set_identity_error(self, trace_id: int, agent_role: str, error: Exception) -> None:
+        with self._lock:
+            self._identity_errors[(trace_id, agent_role)] = error
+
+    def raise_identity_error(self, trace_id: int, agent_role: str) -> None:
+        with self._lock:
+            error = self._identity_errors.get((trace_id, agent_role))
+        if error is not None:
+            raise error
 
     def set_block_info(
         self,
@@ -135,6 +148,9 @@ class GovernanceSpanProcessor(SpanProcessor):
     def clear_trace(self, trace_id: int) -> None:
         with self._lock:
             self._agent_contexts.pop(trace_id, None)
+            self._identity_errors = {
+                key: error for key, error in self._identity_errors.items() if key[0] != trace_id
+            }
             self._activity_contexts.pop(trace_id, None)
             self._abort_flags = {
                 (t, r) for (t, r) in self._abort_flags if t != trace_id
@@ -156,6 +172,8 @@ class GovernanceSpanProcessor(SpanProcessor):
 
     def on_end(self, span: ReadableSpan) -> None:
         """Evaluate completed operation spans against Core."""
+        if is_governance_http_suppressed():
+            return
         ctx = span.get_span_context()
         if not ctx or not ctx.trace_id:
             return
@@ -217,8 +235,12 @@ class GovernanceSpanProcessor(SpanProcessor):
 
         try:
             response = binding["governance_client"].evaluate(
-                payload.to_dict(), agent_ctx.api_key, agent_ctx.identity
+                payload.to_dict(), agent_ctx.api_key, agent_ctx.identity,
+                workload_private_key=agent_ctx.workload_private_key,
             )
+        except IDENTITY_ERRORS as exc:
+            self.set_identity_error(trace_id, agent_ctx.role, exc)
+            raise
         except Exception:
             logger.exception("Error evaluating completed span %s", span.name)
             return
