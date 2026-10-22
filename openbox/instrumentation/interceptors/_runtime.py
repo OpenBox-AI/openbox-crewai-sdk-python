@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import contextvars
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 from opentelemetry import trace
 
@@ -14,22 +12,16 @@ from openbox.core.config import GovernanceConfig
 from openbox.core.errors import GovernanceAPIError, GovernanceBlockedError
 from openbox.core.payloads import HookPayload
 from openbox.core.spans import SpanData
-from openbox.core.types import AgentContext
 from openbox.core.verdict_handler import resolve_verdict
 from openbox.instrumentation.span_processor import GovernanceSpanProcessor
 from openbox.utils import (
     _llm_allowed_var,
     _llm_block_info_var,
     build_metadata,
+    get_current_execution_frame,
 )
 
 logger = logging.getLogger("openbox")
-
-
-@dataclass(slots=True)
-class ExecutionFrame:
-    agent_context: AgentContext
-    activity_context: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -85,28 +77,6 @@ class HookRuntime:
 
 
 _runtime: HookRuntime | None = None
-_current_execution_frame: contextvars.ContextVar[ExecutionFrame | None] = (
-    contextvars.ContextVar("openbox_current_execution_frame", default=None)
-)
-
-
-def set_current_execution_frame(
-    agent_context: AgentContext,
-    activity_context: dict[str, Any],
-) -> contextvars.Token[ExecutionFrame | None]:
-    return _current_execution_frame.set(
-        ExecutionFrame(agent_context=agent_context, activity_context=activity_context)
-    )
-
-
-def reset_current_execution_frame(
-    token: contextvars.Token[ExecutionFrame | None],
-) -> None:
-    _current_execution_frame.reset(token)
-
-
-def get_current_execution_frame() -> ExecutionFrame | None:
-    return _current_execution_frame.get()
 
 
 def configure(
@@ -189,16 +159,10 @@ def evaluate_started(trace_id: int, span_data: SpanData) -> None:
     config = binding.config
 
     frame = get_current_execution_frame()
-    if frame is not None:
-        agent_ctx = frame.agent_context
-        act_ctx = frame.activity_context
-    else:
-        agent_ctx = sp.get_agent_context(trace_id)
-        if agent_ctx is None:
-            return
-        act_ctx = sp.get_activity_context(trace_id)
-        if act_ctx is None:
-            return
+    if frame is None:
+        return
+    agent_ctx = frame.agent_context
+    act_ctx = frame.activity_context
 
     if sp.is_aborted(trace_id, agent_ctx.role):
         raise GovernanceBlockedError(
@@ -284,16 +248,13 @@ def evaluate_completed(trace_id: int, span_data: SpanData) -> None:
     if binding is None:
         return
 
-    sp = binding.span_processor
     client = binding.governance_client
 
-    agent_ctx = sp.get_agent_context(trace_id)
-    if agent_ctx is None:
+    frame = get_current_execution_frame()
+    if frame is None:
         return
-
-    act_ctx = sp.get_activity_context(trace_id)
-    if act_ctx is None:
-        return
+    agent_ctx = frame.agent_context
+    act_ctx = frame.activity_context
     task_activity_id = act_ctx["activity_id"]
     task_activity_type = act_ctx.get("activity_type")
     if not task_activity_type:

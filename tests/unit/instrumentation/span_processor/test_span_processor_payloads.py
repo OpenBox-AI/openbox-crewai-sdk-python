@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from openbox.instrumentation.span_processor import GovernanceSpanProcessor
+from openbox.utils import set_current_execution_frame
 
 from ...conftest import (
     CREW_EXEC_ID,
@@ -43,8 +44,7 @@ class TestSpanProcessorPayloads:
         trace_id = 55555
         span_id = 77777
         ctx = make_agent_context(multi_agent_session_id=MULTI_AGENT_SESSION_ID)
-        sp.register_trace(trace_id, ctx)
-        sp.set_activity_context(trace_id, {"activity_id": "act-003", "activity_type": "task"})
+        set_current_execution_frame(ctx, {"activity_id": "act-003", "activity_type": "task"})
 
         mock_span = _make_mock_span(trace_id, span_id)
         mock_span.attributes = {"http.method": "GET", "http.url": "https://example.com/api"}
@@ -66,8 +66,7 @@ class TestSpanProcessorPayloads:
         trace_id = 55556
         span_id = 77778
         ctx = make_agent_context(multi_agent_session_id=None)
-        sp.register_trace(trace_id, ctx)
-        sp.set_activity_context(trace_id, {"activity_id": "act-004", "activity_type": "task"})
+        set_current_execution_frame(ctx, {"activity_id": "act-004", "activity_type": "task"})
 
         mock_span = _make_mock_span(trace_id, span_id)
         mock_span.attributes = {"http.method": "POST", "http.url": "https://example.com/api"}

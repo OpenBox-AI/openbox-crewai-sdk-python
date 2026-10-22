@@ -6,6 +6,7 @@ from openbox.core.spans import HttpSpanData, Stage
 from openbox.instrumentation.interceptors import evaluate_started
 from openbox.instrumentation.interceptors._runtime import configure, reset
 from openbox.instrumentation.span_processor import GovernanceSpanProcessor
+from openbox.utils import set_current_execution_frame
 
 from ...conftest import (
     CREW_EXEC_ID,
@@ -25,8 +26,7 @@ class TestHookPayloads:
 
         trace_id = 12345
         ctx = make_agent_context(multi_agent_session_id=MULTI_AGENT_SESSION_ID)
-        sp.register_trace(trace_id, ctx)
-        sp.set_activity_context(trace_id, {"activity_id": "act-001", "activity_type": "task"})
+        set_current_execution_frame(ctx, {"activity_id": "act-001", "activity_type": "task"})
 
         configure(
             span_processor=sp,
@@ -61,8 +61,7 @@ class TestHookPayloads:
 
         trace_id = 99999
         ctx = make_agent_context(multi_agent_session_id=None)
-        sp.register_trace(trace_id, ctx)
-        sp.set_activity_context(trace_id, {"activity_id": "act-002", "activity_type": "task"})
+        set_current_execution_frame(ctx, {"activity_id": "act-002", "activity_type": "task"})
 
         configure(
             span_processor=sp,

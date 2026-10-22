@@ -15,7 +15,11 @@ from openbox.instrumentation.interceptors._runtime import (
     get_current_trace_id,
     get_runtime,
 )
-from openbox.utils import format_span_id, format_trace_id
+from openbox.utils import (
+    format_span_id,
+    format_trace_id,
+    get_current_execution_frame,
+)
 
 logger = logging.getLogger("openbox")
 
@@ -92,8 +96,7 @@ def _emit_started(
     if binding is None:
         return None
 
-    agent_ctx = binding.span_processor.get_agent_context(trace_id)
-    if agent_ctx is None:
+    if get_current_execution_frame() is None:
         return None
 
     span_id = format_span_id(secrets.randbits(64))

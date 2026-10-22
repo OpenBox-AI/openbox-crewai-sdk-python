@@ -38,17 +38,15 @@ from openbox.core.types import AgentContext, GovernanceResponse, Verdict
 from openbox.core.verdict_handler import resolve_verdict, resolve_verdict_async
 from openbox.crewai.task import OpenBoxTask
 from openbox.engine import OpenBoxEngine
-from openbox.instrumentation.interceptors._runtime import (
-    reset_current_execution_frame,
-    set_current_execution_frame,
-)
 from openbox.instrumentation.span_processor import GovernanceSpanProcessor
 from openbox.utils import (
     _handoff_origin_did_var,
     _llm_allowed_var,
     _llm_block_info_var,
     _multi_agent_session_id_var,
+    reset_current_execution_frame,
     rfc3339_now,
+    set_current_execution_frame,
     validate_api_key_format,
 )
 
@@ -362,8 +360,6 @@ class OpenBoxAgent(Agent):
                 "activity_id": activity_id,
                 "activity_type": activity_type,
             }
-            self._span_processor.register_trace(trace_id, agent_ctx)
-            self._span_processor.set_activity_context(trace_id, activity_ctx)
             existing = self._span_processor.get_block_info_for_agent(
                 trace_id, self.role
             )
@@ -403,7 +399,6 @@ class OpenBoxAgent(Agent):
             finally:
                 reset_current_execution_frame(frame_token)
                 _handoff_origin_did_var.reset(origin_token)
-                self._span_processor.clear_activity_context(trace_id)
 
         # Layer 2: post-task
         if config.send_task_completed_event:
@@ -662,8 +657,6 @@ class OpenBoxAgent(Agent):
                 "activity_id": activity_id,
                 "activity_type": activity_type,
             }
-            self._span_processor.register_trace(trace_id, agent_ctx)
-            self._span_processor.set_activity_context(trace_id, activity_ctx)
             existing = self._span_processor.get_block_info_for_agent(
                 trace_id, self.role
             )
@@ -703,7 +696,6 @@ class OpenBoxAgent(Agent):
             finally:
                 reset_current_execution_frame(frame_token)
                 _handoff_origin_did_var.reset(origin_token)
-                self._span_processor.clear_activity_context(trace_id)
 
         # Layer 2: post-task
         if config.send_task_completed_event:
