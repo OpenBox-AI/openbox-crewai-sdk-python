@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Async crew demo — same governed researcher as demo_01_crew_sync, driven via akickoff().
 
-Prerequisite: provision an identity for the researcher agent in the OpenBox
-Platform and paste the DID + private key into .env as OPENBOX_RESEARCHER_DID
-and OPENBOX_RESEARCHER_PRIVATE_KEY.
+Prerequisite: create the researcher agent in the OpenBox Platform and put its
+API key and workload private key into .env as OPENBOX_RESEARCHER_API_KEY and
+OPENBOX_RESEARCHER_WORKLOAD_PRIVATE_KEY.
 """
 
 import asyncio
@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from demo_02_crew_async.crew import ResearchCrew
 from openbox import create_openbox_engine
-from openbox.core.errors import GovernanceHaltError
+from openbox.errors import GovernanceHaltError
 
 load_dotenv()
 

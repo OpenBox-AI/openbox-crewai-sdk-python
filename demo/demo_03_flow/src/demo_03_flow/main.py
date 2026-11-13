@@ -3,11 +3,11 @@
 
 Each crew is a separate @CrewBase class with its own config directory. The
 Flow orchestrates them via @start / @listen, and the OpenBox engine wraps
-both crews so every governance event is signed with each agent's DID.
+both crews so every governance event is sent with each agent's own credentials.
 
-Prerequisite: provision an identity for each of the three agents
-(senior_researcher, data_analyst, technical_writer) in the OpenBox
-Platform and paste the DIDs + private keys into ``.env``.
+Prerequisite: create the three agents (senior_researcher, data_analyst,
+technical_writer) in the OpenBox Platform and put each one's API key and
+workload private key into ``.env``.
 """
 
 import asyncio
@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from demo_03_flow.crews.research_crew.research_crew import ResearchCrew
 from demo_03_flow.crews.writing_crew.writing_crew import WritingCrew
 from openbox import OpenBoxEngine, create_openbox_engine, create_openbox_flow
-from openbox.core.errors import GovernanceHaltError
+from openbox.errors import GovernanceHaltError
 
 load_dotenv()
 
